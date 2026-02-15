@@ -8,10 +8,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   BUILD_TYPE: Release
   CMAKE_GENERATOR: Ninja
-  WEBVULKAN_CACHE_VERSION: v1
+  WEBVULKAN_CACHE_VERSION: v2
   LLVM_PREBUILT_URL: ${{ vars.WEBVULKAN_LLVM_PREBUILT_URL }}
   LLVM_PREBUILT_SHA256: ${{ vars.WEBVULKAN_LLVM_PREBUILT_SHA256 }}
 
@@ -23,6 +27,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Install host tools
         run: |
@@ -32,26 +38,32 @@ jobs:
           python3 -m pip install cmake==4.2.0
 
       - name: Restore third-party cache
-        uses: actions/cache@v4
+        id: cache_thirdparty
+        uses: actions/cache/restore@v4
         with:
           path: |
             .3rdparty
-          key: ${{ runner.os }}-webvulkan-thirdparty-${{ env.WEBVULKAN_CACHE_VERSION }}
+          key: ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-${{ env.LLVM_PREBUILT_SHA256 }}
+          restore-keys: |
+            ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-
 
-      - name: Select LLVM provider
-        id: llvm_provider
+      - name: Restore Mesa wasm build cache
+        id: cache_webvulkan_build
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/_webvulkan
+            build/.webvulkan_llvmpipe.stamp
+          key: ${{ runner.os }}-webvulkan-build-${{ env.WEBVULKAN_CACHE_VERSION }}-${{ hashFiles('CMakeLists.txt', 'cmake/BuildMesaLlvmpipeWasm.cmake', 'tests/CMakeLists.txt', 'tests/RunLavapipeRuntimeSmoke.cmake') }}-${{ env.LLVM_PREBUILT_SHA256 }}
+          restore-keys: |
+            ${{ runner.os }}-webvulkan-build-${{ env.WEBVULKAN_CACHE_VERSION }}-
+
+      - name: Validate prebuilt LLVM settings
         shell: bash
         run: |
-          if [ -n "${LLVM_PREBUILT_URL}" ]; then
-            echo "mode=prebuilt" >> "$GITHUB_OUTPUT"
-            ARGS="-DLLVM_PROVIDER=prebuilt -DLLVM_PREBUILT_URL=${LLVM_PREBUILT_URL}"
-            if [ -n "${LLVM_PREBUILT_SHA256}" ]; then
-              ARGS="${ARGS} -DLLVM_PREBUILT_SHA256=${LLVM_PREBUILT_SHA256}"
-            fi
-            echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=source" >> "$GITHUB_OUTPUT"
-            echo "args=-DLLVM_PROVIDER=source -DLLVM_GIT_REF=main" >> "$GITHUB_OUTPUT"
+          if [ -z "${LLVM_PREBUILT_URL}" ]; then
+            echo "WEBVULKAN_LLVM_PREBUILT_URL repository variable is required for CI"
+            exit 1
           fi
 
       - name: Configure root project
@@ -59,7 +71,10 @@ jobs:
           cmake -S . -B build -G "${CMAKE_GENERATOR}" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DWEBVULKAN_BUILD_TESTS=ON \
-            ${{ steps.llvm_provider.outputs.args }}
+            -DWEBVULKAN_ALLOW_DEP_UPDATES=OFF \
+            -DLLVM_PROVIDER=prebuilt \
+            -DLLVM_PREBUILT_URL="${LLVM_PREBUILT_URL}" \
+            -DLLVM_PREBUILT_SHA256="${LLVM_PREBUILT_SHA256}"
 
       - name: Build and run in-tree smoke
         run: |
@@ -76,6 +91,23 @@ jobs:
           path: package
           if-no-files-found: error
 
+      - name: Save Mesa wasm build cache
+        if: always() && steps.cache_webvulkan_build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/_webvulkan
+            build/.webvulkan_llvmpipe.stamp
+          key: ${{ steps.cache_webvulkan_build.outputs.cache-primary-key }}
+
+      - name: Save third-party cache
+        if: always() && steps.cache_thirdparty.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .3rdparty
+          key: ${{ steps.cache_thirdparty.outputs.cache-primary-key }}
+
   package_sparse_tests:
     name: package sparse-tests smoke
     runs-on: ubuntu-latest
@@ -86,6 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 1
           path: tests-only
           sparse-checkout: |
             tests
@@ -99,26 +132,28 @@ jobs:
           python3 -m pip install cmake==4.2.0
 
       - name: Restore third-party cache
-        uses: actions/cache@v4
+        id: cache_thirdparty
+        uses: actions/cache/restore@v4
         with:
           path: |
             .3rdparty
-          key: ${{ runner.os }}-webvulkan-thirdparty-${{ env.WEBVULKAN_CACHE_VERSION }}
-
-      - name: Bootstrap emsdk when cache is empty
-        run: |
-          if [ ! -x "${GITHUB_WORKSPACE}/.3rdparty/emsdk/upstream/emscripten/emcc" ]; then
-            rm -rf "${GITHUB_WORKSPACE}/.3rdparty/emsdk"
-            git clone --depth 1 https://github.com/emscripten-core/emsdk.git "${GITHUB_WORKSPACE}/.3rdparty/emsdk"
-            "${GITHUB_WORKSPACE}/.3rdparty/emsdk/emsdk" install latest
-            "${GITHUB_WORKSPACE}/.3rdparty/emsdk/emsdk" activate latest
-          fi
+          key: ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-${{ env.LLVM_PREBUILT_SHA256 }}
+          restore-keys: |
+            ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-
 
       - name: Download relocatable package
         uses: actions/download-artifact@v4
         with:
           name: webvulkan-package
           path: package
+
+      - name: Validate cached emsdk
+        shell: bash
+        run: |
+          if [ ! -x "${GITHUB_WORKSPACE}/.3rdparty/emsdk/upstream/emscripten/emcc" ]; then
+            echo "emsdk is missing in cache. Re-run workflow after in-tree job saves cache."
+            exit 1
+          fi
 
       - name: Configure sparse tests against package
         run: |
