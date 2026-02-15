@@ -21,7 +21,7 @@ env:
 
 jobs:
   in_tree_add_subdirectory:
-    name: in-tree add_subdirectory smoke
+    name: in-tree add_subdirectory
     runs-on: ubuntu-latest
     timeout-minutes: 240
 
@@ -109,7 +109,7 @@ jobs:
           key: ${{ steps.cache_thirdparty.outputs.cache-primary-key }}
 
   package_sparse_tests:
-    name: package sparse-tests smoke
+    name: package sparse-tests
     runs-on: ubuntu-latest
     timeout-minutes: 180
     needs:
