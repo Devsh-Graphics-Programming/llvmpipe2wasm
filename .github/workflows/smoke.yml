@@ -38,11 +38,20 @@ jobs:
             .3rdparty
           key: ${{ runner.os }}-webvulkan-thirdparty-${{ env.WEBVULKAN_CACHE_VERSION }}
 
-      - name: Validate LLVM prebuilt settings
+      - name: Select LLVM provider
+        id: llvm_provider
+        shell: bash
         run: |
-          if [ -z "${LLVM_PREBUILT_URL}" ]; then
-            echo "Repository variable WEBVULKAN_LLVM_PREBUILT_URL is required"
-            exit 1
+          if [ -n "${LLVM_PREBUILT_URL}" ]; then
+            echo "mode=prebuilt" >> "$GITHUB_OUTPUT"
+            ARGS="-DLLVM_PROVIDER=prebuilt -DLLVM_PREBUILT_URL=${LLVM_PREBUILT_URL}"
+            if [ -n "${LLVM_PREBUILT_SHA256}" ]; then
+              ARGS="${ARGS} -DLLVM_PREBUILT_SHA256=${LLVM_PREBUILT_SHA256}"
+            fi
+            echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=source" >> "$GITHUB_OUTPUT"
+            echo "args=-DLLVM_PROVIDER=source" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Configure root project
@@ -50,9 +59,7 @@ jobs:
           cmake -S . -B build -G "${CMAKE_GENERATOR}" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DWEBVULKAN_BUILD_TESTS=ON \
-            -DLLVM_PROVIDER=prebuilt \
-            -DLLVM_PREBUILT_URL="${LLVM_PREBUILT_URL}" \
-            -DLLVM_PREBUILT_SHA256="${LLVM_PREBUILT_SHA256}"
+            ${{ steps.llvm_provider.outputs.args }}
 
       - name: Build and run in-tree smoke
         run: |
