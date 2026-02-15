@@ -4,10 +4,36 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(webvulkan_tests LANGUAGES NONE)
 endif()
 
+set(WEBVULKAN_TEST_THIRDPARTY_DIR "${CMAKE_CURRENT_LIST_DIR}/../.3rdparty/tests" CACHE PATH "Test-only third-party root directory")
+set(WEBVULKAN_VOLK_GIT_URL "https://github.com/zeux/volk.git" CACHE STRING "volk git repository URL for smoke tests")
+set(WEBVULKAN_VOLK_GIT_REF "1.4.304" CACHE STRING "Pinned volk git ref for smoke tests")
+
 set(WEBVULKAN_TEST_MODE "auto" CACHE STRING "Test mode: auto, in-tree, or package")
 set_property(CACHE WEBVULKAN_TEST_MODE PROPERTY STRINGS auto in-tree package)
 set(WEBVULKAN_TEST_PACKAGE_PREFIX "" CACHE PATH "Install prefix for WebVulkan package mode")
 set(WEBVULKAN_TEST_WASM_BUILD_DIR "${CMAKE_BINARY_DIR}/wasm" CACHE PATH "WASM smoke build directory")
+
+if(NOT COMMAND CPMAddPackage)
+  if(NOT DEFINED WEBVULKAN_CPM_VERSION OR WEBVULKAN_CPM_VERSION STREQUAL "")
+    set(WEBVULKAN_CPM_VERSION "0.40.2" CACHE STRING "CPM.cmake release version for tests")
+  endif()
+  if(NOT DEFINED WEBVULKAN_CPM_DIR OR WEBVULKAN_CPM_DIR STREQUAL "")
+    set(WEBVULKAN_CPM_DIR "${WEBVULKAN_TEST_THIRDPARTY_DIR}/cpm" CACHE PATH "Directory where CPM.cmake is stored for tests")
+  endif()
+  if(NOT DEFINED CPM_SOURCE_CACHE OR CPM_SOURCE_CACHE STREQUAL "")
+    set(CPM_SOURCE_CACHE "${WEBVULKAN_TEST_THIRDPARTY_DIR}/cpm-cache" CACHE PATH "CPM source cache path for tests")
+  endif()
+  if(NOT DEFINED WEBVULKAN_ALLOW_DEP_UPDATES)
+    set(WEBVULKAN_ALLOW_DEP_UPDATES OFF CACHE BOOL "Allow dependency git update during configure")
+  endif()
+  if(WEBVULKAN_ALLOW_DEP_UPDATES)
+    set(CPM_UPDATE_DISCONNECTED OFF CACHE BOOL "CPM update disconnected mode" FORCE)
+  else()
+    set(CPM_UPDATE_DISCONNECTED ON CACHE BOOL "CPM update disconnected mode" FORCE)
+  endif()
+  include("${CMAKE_CURRENT_LIST_DIR}/../cmake/BootstrapCpm.cmake")
+  webvulkan_bootstrap_cpm()
+endif()
 
 set(_webvulkan_test_mode "${WEBVULKAN_TEST_MODE}")
 if(_webvulkan_test_mode STREQUAL "auto")
@@ -49,6 +75,20 @@ endif()
 
 if(NOT SUBBUILD_GENERATOR)
   message(FATAL_ERROR "No CMake generator is available for wasm smoke sub-build")
+endif()
+
+CPMAddPackage(
+  NAME webvulkan_volk
+  GIT_REPOSITORY "${WEBVULKAN_VOLK_GIT_URL}"
+  GIT_TAG "${WEBVULKAN_VOLK_GIT_REF}"
+  GIT_SHALLOW TRUE
+  DOWNLOAD_ONLY YES
+)
+set(_webvulkan_volk_include_dir "${webvulkan_volk_SOURCE_DIR}")
+set(_webvulkan_volk_source "${webvulkan_volk_SOURCE_DIR}/volk.c")
+set(_webvulkan_volk_header "${webvulkan_volk_SOURCE_DIR}/volk.h")
+if(NOT EXISTS "${_webvulkan_volk_source}" OR NOT EXISTS "${_webvulkan_volk_header}")
+  message(FATAL_ERROR "volk sources are missing under ${webvulkan_volk_SOURCE_DIR}")
 endif()
 
 if(_webvulkan_test_mode STREQUAL "in-tree")
@@ -106,6 +146,8 @@ set(_webvulkan_lavapipe_depends
   "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
   "${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c"
   "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs"
+  "${_webvulkan_volk_source}"
+  "${_webvulkan_volk_header}"
   "${_webvulkan_driver_archive}"
 )
 if(_webvulkan_test_mode STREQUAL "in-tree")
@@ -122,6 +164,8 @@ add_custom_command(
     -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c
     -DSMOKE_JS_OUT=${WEBVULKAN_LAVAPIPE_SMOKE_JS}
     -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
+    -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
+    -DVOLK_SOURCE=${_webvulkan_volk_source}
     -P "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
   COMMAND "${CMAKE_COMMAND}" -E touch "${WEBVULKAN_LAVAPIPE_SMOKE_OK}"
   DEPENDS ${_webvulkan_lavapipe_depends}
