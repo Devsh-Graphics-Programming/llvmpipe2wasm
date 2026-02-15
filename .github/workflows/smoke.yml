@@ -51,7 +51,7 @@ jobs:
             echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=source" >> "$GITHUB_OUTPUT"
-            echo "args=-DLLVM_PROVIDER=source" >> "$GITHUB_OUTPUT"
+            echo "args=-DLLVM_PROVIDER=source -DLLVM_GIT_REF=main" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Configure root project
