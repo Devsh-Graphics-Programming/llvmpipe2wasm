@@ -65,6 +65,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("  vkCreateInstance=ok\n");
   printf("  vkEnumeratePhysicalDevices=ok\n");
   printf("  physical_devices=%u\n", physicalDeviceCount);
+  printf("  vk_icd.entrypoint=vk_icdGetInstanceProcAddr\n");
   destroyInstance(instance, 0);
   return 0;
 }
