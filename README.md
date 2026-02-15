@@ -20,6 +20,19 @@ Public link targets:
 - `webvulkan::llvmpipe_wasm`
 - `webvulkan::lavapipe_wasm`
 
+## Scope
+
+What this repository does:
+- Builds and exposes Mesa llvmpipe/lavapipe wasm archives as CMake targets
+- Supports in-tree consumption via `add_subdirectory`
+- Supports relocatable package consumption via `find_package`
+- Provides runtime smoke checks for CI validation
+
+What this repository does not do for consumers:
+- It is not a full Vulkan browser runtime
+- It does not provide a browser app framework or rendering engine
+- It does not replace the consumer's own Vulkan/WebGPU integration layer
+
 ## Default dependency mode
 
 Default configuration uses the latest prebuilt LLVM bundle from this repository:
