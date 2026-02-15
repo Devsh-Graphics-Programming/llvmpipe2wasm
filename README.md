@@ -35,6 +35,14 @@ cmake --install build --prefix <install-prefix>
 
 `cmake --install` expects build artifacts to already exist and does not trigger a build.
 
+Default configuration uses a prebuilt LLVM bundle from this repository release.
+
+To force LLVM build from source:
+
+```powershell
+cmake -S . -B build -G Ninja -DLLVM_PROVIDER=source
+```
+
 Consume:
 
 ```cmake
