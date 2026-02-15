@@ -12,6 +12,7 @@ concurrency:
 permissions:
   contents: write
   actions: write
+  id-token: write
 
 env:
   BUILD_TYPE: Release
@@ -109,6 +110,41 @@ jobs:
             (out / f"{zip_name}.sha256").write_text(f"{digest}  {zip_name}\n", encoding="utf-8")
           PY
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release bundles
+        run: |
+          cosign sign-blob --yes \
+            --output-signature release_artifacts/llvm-wasm-install.zip.sig \
+            --output-certificate release_artifacts/llvm-wasm-install.zip.pem \
+            release_artifacts/llvm-wasm-install.zip
+          cosign sign-blob --yes \
+            --output-signature release_artifacts/webvulkan-package.zip.sig \
+            --output-certificate release_artifacts/webvulkan-package.zip.pem \
+            release_artifacts/webvulkan-package.zip
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          mkdir -p release_notes
+
+          cp .github/release-notes/llvm-wasm-prebuilt-latest.md release_notes/llvm-wasm-prebuilt-latest.md
+          {
+            echo
+            echo "Build metadata:"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> release_notes/llvm-wasm-prebuilt-latest.md
+
+          cp .github/release-notes/webvulkan-package-latest.md release_notes/webvulkan-package-latest.md
+          {
+            echo
+            echo "Build metadata:"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> release_notes/webvulkan-package-latest.md
+
       - name: Upload refresh artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -122,15 +158,18 @@ jobs:
         run: |
           LLVM_ZIP="release_artifacts/llvm-wasm-install.zip"
           LLVM_SHA="release_artifacts/llvm-wasm-install.zip.sha256"
+          LLVM_SIG="release_artifacts/llvm-wasm-install.zip.sig"
+          LLVM_PEM="release_artifacts/llvm-wasm-install.zip.pem"
+          LLVM_NOTES="release_notes/llvm-wasm-prebuilt-latest.md"
           if gh release view "${LLVM_RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${LLVM_RELEASE_TAG}" "${LLVM_ZIP}" "${LLVM_SHA}" --clobber
+            gh release upload "${LLVM_RELEASE_TAG}" "${LLVM_ZIP}" "${LLVM_SHA}" "${LLVM_SIG}" "${LLVM_PEM}" --clobber
             gh release edit "${LLVM_RELEASE_TAG}" \
               --title "LLVM wasm prebuilt latest" \
-              --notes "Auto-refreshed from ${GITHUB_SHA}."
+              --notes-file "${LLVM_NOTES}"
           else
-            gh release create "${LLVM_RELEASE_TAG}" "${LLVM_ZIP}" "${LLVM_SHA}" \
+            gh release create "${LLVM_RELEASE_TAG}" "${LLVM_ZIP}" "${LLVM_SHA}" "${LLVM_SIG}" "${LLVM_PEM}" \
               --title "LLVM wasm prebuilt latest" \
-              --notes "Auto-refreshed from ${GITHUB_SHA}."
+              --notes-file "${LLVM_NOTES}"
           fi
 
       - name: Publish package release
@@ -139,30 +178,45 @@ jobs:
         run: |
           PKG_ZIP="release_artifacts/webvulkan-package.zip"
           PKG_SHA="release_artifacts/webvulkan-package.zip.sha256"
+          PKG_SIG="release_artifacts/webvulkan-package.zip.sig"
+          PKG_PEM="release_artifacts/webvulkan-package.zip.pem"
+          PKG_NOTES="release_notes/webvulkan-package-latest.md"
           if gh release view "${PACKAGE_RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${PACKAGE_RELEASE_TAG}" "${PKG_ZIP}" "${PKG_SHA}" --clobber
+            gh release upload "${PACKAGE_RELEASE_TAG}" "${PKG_ZIP}" "${PKG_SHA}" "${PKG_SIG}" "${PKG_PEM}" --clobber
             gh release edit "${PACKAGE_RELEASE_TAG}" \
               --title "WebVulkan package latest" \
-              --notes "Auto-refreshed from ${GITHUB_SHA}."
+              --notes-file "${PKG_NOTES}"
           else
-            gh release create "${PACKAGE_RELEASE_TAG}" "${PKG_ZIP}" "${PKG_SHA}" \
+            gh release create "${PACKAGE_RELEASE_TAG}" "${PKG_ZIP}" "${PKG_SHA}" "${PKG_SIG}" "${PKG_PEM}" \
               --title "WebVulkan package latest" \
-              --notes "Auto-refreshed from ${GITHUB_SHA}."
+              --notes-file "${PKG_NOTES}"
           fi
 
       - name: Update repository variables
         env:
           GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        shell: bash
         run: |
           LLVM_SHA="$(cut -d' ' -f1 release_artifacts/llvm-wasm-install.zip.sha256)"
           LLVM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${LLVM_RELEASE_TAG}/llvm-wasm-install.zip"
           PKG_SHA="$(cut -d' ' -f1 release_artifacts/webvulkan-package.zip.sha256)"
           PKG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGE_RELEASE_TAG}/webvulkan-package.zip"
 
+          set +e
           gh variable set WEBVULKAN_LLVM_PREBUILT_URL --repo "${GITHUB_REPOSITORY}" --body "${LLVM_URL}"
+          STATUS_A=$?
           gh variable set WEBVULKAN_LLVM_PREBUILT_SHA256 --repo "${GITHUB_REPOSITORY}" --body "${LLVM_SHA}"
+          STATUS_B=$?
           gh variable set WEBVULKAN_PACKAGE_URL --repo "${GITHUB_REPOSITORY}" --body "${PKG_URL}"
+          STATUS_C=$?
           gh variable set WEBVULKAN_PACKAGE_SHA256 --repo "${GITHUB_REPOSITORY}" --body "${PKG_SHA}"
+          STATUS_D=$?
+          set -e
+
+          if [ "${STATUS_A}" -ne 0 ] || [ "${STATUS_B}" -ne 0 ] || [ "${STATUS_C}" -ne 0 ] || [ "${STATUS_D}" -ne 0 ]; then
+            echo "::warning::Repository variable update was skipped due to permission policy. Releases were still updated."
+          fi
 
       - name: Save refresh build cache
         if: always() && steps.cache_build.outputs.cache-hit != 'true'
