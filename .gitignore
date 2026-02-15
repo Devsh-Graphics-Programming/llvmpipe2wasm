@@ -1,0 +1,5 @@
+/build/
+/build*/
+/.3rdparty/
+/out/
+.DS_Store
