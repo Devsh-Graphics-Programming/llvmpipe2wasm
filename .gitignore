@@ -1,5 +1,6 @@
 /build/
 /build*/
+/package*/
 /.3rdparty/
 /out/
 .DS_Store

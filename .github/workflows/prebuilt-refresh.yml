@@ -1,0 +1,182 @@
+name: prebuilt-refresh
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: prebuilt-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  BUILD_TYPE: Release
+  CMAKE_GENERATOR: Ninja
+  WEBVULKAN_REFRESH_CACHE_VERSION: v1
+  LLVM_RELEASE_TAG: llvm-wasm-prebuilt-latest
+  PACKAGE_RELEASE_TAG: webvulkan-package-latest
+
+jobs:
+  refresh_prebuilt:
+    name: refresh prebuilt bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build flex bison python3-pip glslang-tools
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==4.2.0
+
+      - name: Restore third-party cache
+        id: cache_thirdparty
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .3rdparty
+          key: ${{ runner.os }}-webvulkan-refresh-3rdparty-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-${{ hashFiles('CMakeLists.txt', 'cmake/FetchWebVulkanSources.cmake', 'cmake/BuildMesaLlvmpipeWasm.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-webvulkan-refresh-3rdparty-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-
+
+      - name: Restore refresh build cache
+        id: cache_build
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build_refresh/_webvulkan
+            build_refresh/.webvulkan_llvmpipe.stamp
+          key: ${{ runner.os }}-webvulkan-refresh-build-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-${{ hashFiles('CMakeLists.txt', 'cmake/BuildMesaLlvmpipeWasm.cmake', 'tests/CMakeLists.txt', 'tests/RunLavapipeRuntimeSmoke.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-webvulkan-refresh-build-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-
+
+      - name: Configure latest source refresh build
+        run: |
+          cmake -S . -B build_refresh -G "${CMAKE_GENERATOR}" \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DWEBVULKAN_BUILD_TESTS=ON \
+            -DWEBVULKAN_ALLOW_DEP_UPDATES=ON \
+            -DWASM_EMSDK_GIT_REF=main \
+            -DWASM_EMSDK_VERSION=latest \
+            -DMESA_GIT_REF=main \
+            -DLLVM_PROVIDER=source \
+            -DLLVM_GIT_REF=main
+
+      - name: Build and run runtime smoke
+        run: |
+          cmake --build build_refresh --target runtime_smoke --config "${BUILD_TYPE}"
+
+      - name: Install relocatable package
+        run: |
+          cmake --install build_refresh --prefix package_refresh
+
+      - name: Pack LLVM and package bundles
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import zipfile
+          from pathlib import Path
+
+          root = Path(os.environ["GITHUB_WORKSPACE"])
+          out = root / "release_artifacts"
+          out.mkdir(exist_ok=True)
+
+          bundles = [
+            ("llvm-wasm-install.zip", root / ".3rdparty" / "llvm-wasm-install"),
+            ("webvulkan-package.zip", root / "package_refresh"),
+          ]
+
+          for zip_name, src_dir in bundles:
+            zip_path = out / zip_name
+            if zip_path.exists():
+              zip_path.unlink()
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+              for file_path in src_dir.rglob("*"):
+                if file_path.is_file():
+                  zf.write(file_path, file_path.relative_to(src_dir).as_posix())
+
+            digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+            (out / f"{zip_name}.sha256").write_text(f"{digest}  {zip_name}\n", encoding="utf-8")
+          PY
+
+      - name: Upload refresh artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-refresh-bundles
+          path: release_artifacts
+          if-no-files-found: error
+
+      - name: Publish LLVM prebuilt release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LLVM_ZIP="release_artifacts/llvm-wasm-install.zip"
+          LLVM_SHA="release_artifacts/llvm-wasm-install.zip.sha256"
+          if gh release view "${LLVM_RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${LLVM_RELEASE_TAG}" "${LLVM_ZIP}" "${LLVM_SHA}" --clobber
+            gh release edit "${LLVM_RELEASE_TAG}" \
+              --title "LLVM wasm prebuilt latest" \
+              --notes "Auto-refreshed from ${GITHUB_SHA}."
+          else
+            gh release create "${LLVM_RELEASE_TAG}" "${LLVM_ZIP}" "${LLVM_SHA}" \
+              --title "LLVM wasm prebuilt latest" \
+              --notes "Auto-refreshed from ${GITHUB_SHA}."
+          fi
+
+      - name: Publish package release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PKG_ZIP="release_artifacts/webvulkan-package.zip"
+          PKG_SHA="release_artifacts/webvulkan-package.zip.sha256"
+          if gh release view "${PACKAGE_RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${PACKAGE_RELEASE_TAG}" "${PKG_ZIP}" "${PKG_SHA}" --clobber
+            gh release edit "${PACKAGE_RELEASE_TAG}" \
+              --title "WebVulkan package latest" \
+              --notes "Auto-refreshed from ${GITHUB_SHA}."
+          else
+            gh release create "${PACKAGE_RELEASE_TAG}" "${PKG_ZIP}" "${PKG_SHA}" \
+              --title "WebVulkan package latest" \
+              --notes "Auto-refreshed from ${GITHUB_SHA}."
+          fi
+
+      - name: Update repository variables
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LLVM_SHA="$(cut -d' ' -f1 release_artifacts/llvm-wasm-install.zip.sha256)"
+          LLVM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${LLVM_RELEASE_TAG}/llvm-wasm-install.zip"
+          PKG_SHA="$(cut -d' ' -f1 release_artifacts/webvulkan-package.zip.sha256)"
+          PKG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGE_RELEASE_TAG}/webvulkan-package.zip"
+
+          gh variable set WEBVULKAN_LLVM_PREBUILT_URL --repo "${GITHUB_REPOSITORY}" --body "${LLVM_URL}"
+          gh variable set WEBVULKAN_LLVM_PREBUILT_SHA256 --repo "${GITHUB_REPOSITORY}" --body "${LLVM_SHA}"
+          gh variable set WEBVULKAN_PACKAGE_URL --repo "${GITHUB_REPOSITORY}" --body "${PKG_URL}"
+          gh variable set WEBVULKAN_PACKAGE_SHA256 --repo "${GITHUB_REPOSITORY}" --body "${PKG_SHA}"
+
+      - name: Save refresh build cache
+        if: always() && steps.cache_build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build_refresh/_webvulkan
+            build_refresh/.webvulkan_llvmpipe.stamp
+          key: ${{ steps.cache_build.outputs.cache-primary-key }}
+
+      - name: Save third-party cache
+        if: always() && steps.cache_thirdparty.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .3rdparty
+          key: ${{ steps.cache_thirdparty.outputs.cache-primary-key }}
