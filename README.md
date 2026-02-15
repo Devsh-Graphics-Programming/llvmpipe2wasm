@@ -67,5 +67,23 @@ target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
 
 ## Release channels
 
-- `llvm-wasm-prebuilt-latest` contains only `llvm-wasm-install.zip`
-- `webvulkan-package-latest` contains only `webvulkan-package.zip`
+- `llvm-wasm-prebuilt-latest` contains only the LLVM prebuilt bundle
+- `webvulkan-package-latest` contains only the relocatable CMake package
+
+Each channel ships:
+- bundle `.zip`
+- checksum `.sha256`
+- Sigstore signature `.sig`
+- Sigstore certificate `.pem`
+
+Verify a downloaded bundle:
+
+```bash
+sha256sum -c <bundle>.zip.sha256
+cosign verify-blob \
+  --signature <bundle>.zip.sig \
+  --certificate <bundle>.zip.pem \
+  --certificate-identity-regexp "https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/.*" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  <bundle>.zip
+```
