@@ -1,0 +1,85 @@
+cmake_minimum_required(VERSION 4.2)
+
+function(require_var VAR_NAME)
+  if(NOT DEFINED ${VAR_NAME} OR "${${VAR_NAME}}" STREQUAL "")
+    message(FATAL_ERROR "${VAR_NAME} is required")
+  endif()
+endfunction()
+
+require_var(EMSDK_ROOT)
+require_var(MESA_SRC_DIR)
+require_var(MESA_BUILD_DIR)
+require_var(DRIVER_ARCHIVE)
+require_var(SMOKE_SOURCE)
+require_var(SMOKE_JS_OUT)
+require_var(SMOKE_SCRIPT)
+
+if(CMAKE_HOST_WIN32)
+  set(EMCC_BIN "${EMSDK_ROOT}/upstream/emscripten/emcc.bat")
+  file(GLOB NODE_CANDIDATES "${EMSDK_ROOT}/node/*/bin/node.exe")
+else()
+  set(EMCC_BIN "${EMSDK_ROOT}/upstream/emscripten/emcc")
+  file(GLOB NODE_CANDIDATES "${EMSDK_ROOT}/node/*/bin/node")
+endif()
+
+if(NOT EXISTS "${EMCC_BIN}")
+  message(FATAL_ERROR "emcc not found at ${EMCC_BIN}")
+endif()
+
+if(NOT NODE_CANDIDATES)
+  message(FATAL_ERROR "Node from emsdk was not found")
+endif()
+list(SORT NODE_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+list(GET NODE_CANDIDATES 0 NODE_EXE)
+
+set(MESA_LAVAPIPE_ARCHIVE "${MESA_BUILD_DIR}/src/gallium/frontends/lavapipe/liblavapipe_st.a")
+if(NOT EXISTS "${MESA_LAVAPIPE_ARCHIVE}")
+  message(FATAL_ERROR "Missing lavapipe archive ${MESA_LAVAPIPE_ARCHIVE}")
+endif()
+
+if(NOT EXISTS "${DRIVER_ARCHIVE}")
+  message(FATAL_ERROR "Missing driver archive ${DRIVER_ARCHIVE}")
+endif()
+
+get_filename_component(SMOKE_OUT_DIR "${SMOKE_JS_OUT}" DIRECTORY)
+file(MAKE_DIRECTORY "${SMOKE_OUT_DIR}")
+
+set(RSP_FILE "${SMOKE_OUT_DIR}/lavapipe_runtime_smoke.rsp")
+file(WRITE "${RSP_FILE}" "")
+
+function(append_rsp ARG_VALUE)
+  file(APPEND "${RSP_FILE}" "\"${ARG_VALUE}\"\n")
+endfunction()
+
+append_rsp("${SMOKE_SOURCE}")
+append_rsp("-o")
+append_rsp("${SMOKE_JS_OUT}")
+append_rsp("-std=c11")
+append_rsp("-I${MESA_SRC_DIR}/include")
+append_rsp("-I${MESA_SRC_DIR}/src")
+append_rsp("-sALLOW_MEMORY_GROWTH=1")
+append_rsp("-sMODULARIZE=1")
+append_rsp("-sEXPORT_ES6=1")
+append_rsp("-sENVIRONMENT=web,worker,node")
+append_rsp("-sEXPORTED_FUNCTIONS=['_main','_lavapipe_runtime_smoke']")
+append_rsp("-sEXPORTED_RUNTIME_METHODS=['ccall']")
+append_rsp("${DRIVER_ARCHIVE}")
+
+execute_process(
+  COMMAND "${EMCC_BIN}" "@${RSP_FILE}"
+  RESULT_VARIABLE SMOKE_BUILD_RESULT
+)
+if(NOT SMOKE_BUILD_RESULT EQUAL 0)
+  message(FATAL_ERROR "Failed to build lavapipe runtime smoke")
+endif()
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "SMOKE_MODULE=${SMOKE_JS_OUT}"
+    "SMOKE_EXPORT=_lavapipe_runtime_smoke"
+    "${NODE_EXE}" "${SMOKE_SCRIPT}"
+  RESULT_VARIABLE SMOKE_RUN_RESULT
+)
+if(NOT SMOKE_RUN_RESULT EQUAL 0)
+  message(FATAL_ERROR "lavapipe runtime smoke execution failed")
+endif()

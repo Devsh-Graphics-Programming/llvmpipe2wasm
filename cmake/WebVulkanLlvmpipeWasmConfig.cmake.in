@@ -1,0 +1,26 @@
+@PACKAGE_INIT@
+
+set(_webvulkan_lib_driver "@PACKAGE_CMAKE_INSTALL_LIBDIR@/libwebvulkan_driver.a")
+set(_webvulkan_inc_mesa "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@/mesa")
+set(_webvulkan_inc_mesa_src "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@/mesa/src")
+set(_webvulkan_inc_llvm "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@/llvm")
+
+if(NOT TARGET webvulkan::llvmpipe_wasm)
+  add_library(webvulkan::llvmpipe_wasm INTERFACE IMPORTED)
+  set_target_properties(webvulkan::llvmpipe_wasm PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${_webvulkan_inc_mesa};${_webvulkan_inc_mesa_src};${_webvulkan_inc_llvm}"
+    INTERFACE_LINK_LIBRARIES
+      "${_webvulkan_lib_driver}"
+  )
+endif()
+
+if(NOT TARGET webvulkan::lavapipe_wasm)
+  add_library(webvulkan::lavapipe_wasm INTERFACE IMPORTED)
+  target_link_libraries(webvulkan::lavapipe_wasm INTERFACE webvulkan::llvmpipe_wasm)
+endif()
+
+if(NOT TARGET webvulkan_llvmpipe_wasm)
+  add_library(webvulkan_llvmpipe_wasm INTERFACE IMPORTED)
+  target_link_libraries(webvulkan_llvmpipe_wasm INTERFACE webvulkan::llvmpipe_wasm)
+endif()
