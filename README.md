@@ -33,6 +33,20 @@ What this repository does not do for consumers:
 - It does not provide a browser app framework or rendering engine
 - It does not replace the consumer's own Vulkan/WebGPU integration layer
 
+Current build mode:
+- Driver output is currently static-only (`.a`)
+- Shared driver output mode is planned
+
+## Mesa fork
+
+This project fetches Mesa from our fork:
+- `https://github.com/Devsh-Graphics-Programming/mesa`
+
+Why we use a fork:
+- We carry a small set of wasm-focused patches needed for this project.
+- Current patch scope is focused on lavapipe build behavior for Emscripten so the driver can be consumed in our wasm flow.
+- Non-Emscripten paths remain unchanged.
+
 ## Default dependency mode
 
 Default configuration uses the latest prebuilt LLVM bundle from this repository:

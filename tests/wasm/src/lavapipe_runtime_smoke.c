@@ -4,6 +4,11 @@
 #include <string.h>
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char* pName);
+
+static int string_contains(const char* haystack, const char* needle) {
+  return haystack && needle && strstr(haystack, needle) != 0;
+}
 
 EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   volkInitializeCustom((PFN_vkGetInstanceProcAddr)vk_icdGetInstanceProcAddr);
@@ -70,6 +75,35 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     return 27;
   }
 
+  PFN_vkGetPhysicalDeviceProperties2 pfnGetPhysicalDeviceProperties2 =
+    (PFN_vkGetPhysicalDeviceProperties2)vk_icdGetPhysicalDeviceProcAddr(instance, "vkGetPhysicalDeviceProperties2");
+  if (!pfnGetPhysicalDeviceProperties2) {
+    pfnGetPhysicalDeviceProperties2 =
+      (PFN_vkGetPhysicalDeviceProperties2)vk_icdGetPhysicalDeviceProcAddr(instance, "vkGetPhysicalDeviceProperties2KHR");
+  }
+  if (!pfnGetPhysicalDeviceProperties2) {
+    vkDestroyInstance(instance, 0);
+    return 28;
+  }
+
+  VkPhysicalDeviceDriverProperties driverProps;
+  memset(&driverProps, 0, sizeof(driverProps));
+  driverProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+
+  VkPhysicalDeviceProperties2 props2;
+  memset(&props2, 0, sizeof(props2));
+  props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+  props2.pNext = &driverProps;
+  pfnGetPhysicalDeviceProperties2(physicalDevice, &props2);
+  VkPhysicalDeviceProperties props = props2.properties;
+
+  const int proofDeviceName = string_contains(props.deviceName, "llvmpipe");
+  const int proofDriverName = string_contains(driverProps.driverName, "llvmpipe");
+  if (!proofDeviceName || !proofDriverName) {
+    vkDestroyInstance(instance, 0);
+    return 29;
+  }
+
   printf("lavapipe runtime smoke ok\n");
   printf("  backend=mesa lavapipe (swrast)\n");
   printf("  instance.api=%u.%u.%u (%u)\n",
@@ -80,9 +114,16 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("  vkCreateInstance=ok\n");
   printf("  vkEnumeratePhysicalDevices=ok\n");
   printf("  physical_devices=%u\n", physicalDeviceCount);
-  printf("  vk_icdGetInstanceProcAddr(vkEnumeratePhysicalDevices)=present\n");
-  printf("  vk_icdGetInstanceProcAddr(vkGetPhysicalDeviceProperties)=present\n");
-  printf("  vk_icdGetInstanceProcAddr(vkGetPhysicalDeviceProperties2)=present\n");
+  printf("  device.name=%s\n", props.deviceName);
+  printf("  device.vendor=0x%04x device=0x%04x\n", props.vendorID, props.deviceID);
+  printf("  device.api=%u.%u.%u\n",
+         VK_API_VERSION_MAJOR(props.apiVersion),
+         VK_API_VERSION_MINOR(props.apiVersion),
+         VK_API_VERSION_PATCH(props.apiVersion));
+  printf("  driver.name=%s\n", driverProps.driverName);
+  printf("  driver.info=%s\n", driverProps.driverInfo);
+  printf("  proof.device_name_contains_llvmpipe=%s\n", proofDeviceName ? "yes" : "no");
+  printf("  proof.driver_name_contains_llvmpipe=%s\n", proofDriverName ? "yes" : "no");
   printf("  vulkan_loader=volk (custom vk_icdGetInstanceProcAddr)\n");
   vkDestroyInstance(instance, 0);
   return 0;

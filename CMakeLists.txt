@@ -25,7 +25,7 @@ set(WASM_BUILD_DIR "${WEBVULKAN_BUILD_DIR}/wasm" CACHE PATH "WASM sub-build dire
 set(WEBVULKAN_EMSCRIPTEN_TOOLCHAIN_FILE "${PROJECT_SOURCE_DIR}/cmake/toolchains/WebVulkanEmscripten.cmake" CACHE FILEPATH "Custom Emscripten toolchain file")
 set(MESA_SRC_DIR "${WEBVULKAN_THIRDPARTY_DIR}/mesa" CACHE PATH "Path where Mesa is cloned")
 set(MESA_GIT_URL "https://github.com/Devsh-Graphics-Programming/mesa.git" CACHE STRING "Mesa git repository URL")
-set(MESA_GIT_REF "fc73e2257d9c2b51f64c78eaaafe878a73951eb8" CACHE STRING "Pinned Mesa git ref")
+set(MESA_GIT_REF "029fc5ee759c44470a52ecd09f77132581f3a1c7" CACHE STRING "Pinned Mesa git ref")
 set(MESA_WASM_BUILD_DIR "${WEBVULKAN_BUILD_DIR}/mesa-wasm" CACHE PATH "Mesa WASM build directory")
 set(LLVM_SRC_DIR "${WEBVULKAN_THIRDPARTY_DIR}/llvm-project" CACHE PATH "Path where llvm-project is cloned")
 set(LLVM_HOST_BUILD_DIR "${WEBVULKAN_BUILD_DIR}/llvm-host-tools" CACHE PATH "LLVM host tools build directory")
@@ -110,10 +110,7 @@ endif()
 set(WEBVULKAN_DRIVER_ARCHIVE "${MESA_WASM_BUILD_DIR}/libwebvulkan_driver.full.a")
 set(WEBVULKAN_LLVMPIPE_ARCHIVE "${MESA_WASM_BUILD_DIR}/src/gallium/drivers/llvmpipe/libllvmpipe.full.a")
 set(WEBVULKAN_LAVAPIPE_ARCHIVE "${MESA_WASM_BUILD_DIR}/src/gallium/frontends/lavapipe/liblavapipe_st.full.a")
-set(WEBVULKAN_LLVMPIPE_STAMP "${PROJECT_BINARY_DIR}/.webvulkan_llvmpipe.stamp")
-
-add_custom_command(
-  OUTPUT "${WEBVULKAN_LLVMPIPE_STAMP}"
+add_custom_target(llvmpipe_wasm_spike
   COMMAND
     "${CMAKE_COMMAND}"
     -DEMSDK_ROOT=${EMSDK_ROOT}
@@ -131,20 +128,11 @@ add_custom_command(
     -DLLVM_PREBUILT_URL=${LLVM_PREBUILT_URL}
     -DLLVM_PREBUILT_SHA256=${LLVM_PREBUILT_SHA256}
     -P "${PROJECT_SOURCE_DIR}/cmake/BuildMesaLlvmpipeWasm.cmake"
-  COMMAND "${CMAKE_COMMAND}" -E touch "${WEBVULKAN_LLVMPIPE_STAMP}"
+  BYPRODUCTS "${WEBVULKAN_DRIVER_ARCHIVE}" "${WEBVULKAN_LLVMPIPE_ARCHIVE}" "${WEBVULKAN_LAVAPIPE_ARCHIVE}"
   DEPENDS "${PROJECT_SOURCE_DIR}/cmake/BuildMesaLlvmpipeWasm.cmake"
   USES_TERMINAL
   VERBATIM
 )
-
-add_custom_command(
-  OUTPUT "${WEBVULKAN_DRIVER_ARCHIVE}" "${WEBVULKAN_LLVMPIPE_ARCHIVE}" "${WEBVULKAN_LAVAPIPE_ARCHIVE}"
-  COMMAND "${CMAKE_COMMAND}" -E echo "webvulkan driver archive is ready"
-  DEPENDS "${WEBVULKAN_LLVMPIPE_STAMP}"
-  VERBATIM
-)
-
-add_custom_target(llvmpipe_wasm_spike DEPENDS "${WEBVULKAN_DRIVER_ARCHIVE}")
 add_custom_target(lavapipe_wasm_spike DEPENDS llvmpipe_wasm_spike)
 
 add_library(webvulkan_llvmpipe_wasm INTERFACE)

@@ -258,8 +258,9 @@ set(MESA_LAVAPIPE_THIN_ARCHIVE "${MESA_BUILD_DIR}/src/gallium/frontends/lavapipe
 set(MESA_LAVAPIPE_FULL_ARCHIVE "${MESA_BUILD_DIR}/src/gallium/frontends/lavapipe/liblavapipe_st.full.a")
 set(MESA_WEBVULKAN_DRIVER_ARCHIVE "${MESA_BUILD_DIR}/libwebvulkan_driver.full.a")
 set(MESA_BUILD_STATE_FILE "${MESA_BUILD_DIR}/.webvulkan_mesa_build_state.txt")
-set(MESA_BUILD_SIGNATURE_VERSION "2")
+set(MESA_BUILD_SIGNATURE_VERSION "3")
 set(MESA_SOURCE_REV "${MESA_GIT_REF}")
+set(MESA_SOURCE_TREE_STATE "unknown")
 if(EXISTS "${MESA_SRC_DIR}/.git")
   find_program(GIT_EXECUTABLE NAMES git git.exe)
   if(GIT_EXECUTABLE)
@@ -273,18 +274,80 @@ if(EXISTS "${MESA_SRC_DIR}/.git")
     if(MESA_SOURCE_REV_RESULT EQUAL 0 AND NOT MESA_SOURCE_REV_FROM_GIT STREQUAL "")
       set(MESA_SOURCE_REV "${MESA_SOURCE_REV_FROM_GIT}")
     endif()
+
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${MESA_SRC_DIR}" status --porcelain=v1 --untracked-files=no
+      OUTPUT_VARIABLE MESA_SOURCE_STATUS
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+      RESULT_VARIABLE MESA_SOURCE_STATUS_RESULT
+    )
+    if(MESA_SOURCE_STATUS_RESULT EQUAL 0)
+      if(MESA_SOURCE_STATUS STREQUAL "")
+        set(MESA_SOURCE_TREE_STATE "clean")
+      else()
+        string(SHA256 MESA_SOURCE_STATUS_HASH "${MESA_SOURCE_STATUS}")
+        set(MESA_SOURCE_TREE_STATE "dirty:${MESA_SOURCE_STATUS_HASH}")
+      endif()
+    endif()
   endif()
 endif()
 
-set(MESA_BUILD_SIGNATURE
-  "format=${MESA_BUILD_SIGNATURE_VERSION}\nmesa_rev=${MESA_SOURCE_REV}\nllvm_provider=${LLVM_PROVIDER}\nllvm_git_ref=${LLVM_GIT_REF}\nllvm_prebuilt_url=${LLVM_PREBUILT_URL}\nllvm_prebuilt_sha256=${LLVM_PREBUILT_SHA256}\nemsdk_root=${EMSDK_ROOT}\n"
+set(MESA_CONFIG_SIGNATURE_INPUT
+  "llvm_provider=${LLVM_PROVIDER}\nllvm_git_ref=${LLVM_GIT_REF}\nllvm_prebuilt_url=${LLVM_PREBUILT_URL}\nllvm_prebuilt_sha256=${LLVM_PREBUILT_SHA256}\nemsdk_root=${EMSDK_ROOT}\n"
 )
-if(EXISTS "${MESA_LLVMPIPE_FULL_ARCHIVE}" AND EXISTS "${MESA_LAVAPIPE_FULL_ARCHIVE}" AND EXISTS "${MESA_WEBVULKAN_DRIVER_ARCHIVE}" AND EXISTS "${MESA_BUILD_STATE_FILE}")
-  file(READ "${MESA_BUILD_STATE_FILE}" MESA_EXISTING_BUILD_SIGNATURE)
-  if(MESA_EXISTING_BUILD_SIGNATURE STREQUAL MESA_BUILD_SIGNATURE)
-    message(STATUS "Mesa lavapipe wasm build is up to date")
-    return()
+string(SHA256 MESA_CONFIG_SIGNATURE_HASH "${MESA_CONFIG_SIGNATURE_INPUT}")
+
+set(MESA_SOURCE_SIGNATURE_INPUT
+  "mesa_rev=${MESA_SOURCE_REV}\nmesa_tree_state=${MESA_SOURCE_TREE_STATE}\n"
+)
+string(SHA256 MESA_SOURCE_SIGNATURE_HASH "${MESA_SOURCE_SIGNATURE_INPUT}")
+
+set(MESA_EXISTING_FORMAT "")
+set(MESA_EXISTING_CONFIG_HASH "")
+set(MESA_EXISTING_SOURCE_HASH "")
+if(EXISTS "${MESA_BUILD_STATE_FILE}")
+  file(READ "${MESA_BUILD_STATE_FILE}" MESA_BUILD_STATE_CONTENT)
+  string(REGEX MATCH "format=([^\n\r]+)" _mesa_format_match "${MESA_BUILD_STATE_CONTENT}")
+  if(CMAKE_MATCH_1)
+    set(MESA_EXISTING_FORMAT "${CMAKE_MATCH_1}")
   endif()
+  string(REGEX MATCH "config=([^\n\r]+)" _mesa_config_match "${MESA_BUILD_STATE_CONTENT}")
+  if(CMAKE_MATCH_1)
+    set(MESA_EXISTING_CONFIG_HASH "${CMAKE_MATCH_1}")
+  endif()
+  string(REGEX MATCH "source=([^\n\r]+)" _mesa_source_match "${MESA_BUILD_STATE_CONTENT}")
+  if(CMAKE_MATCH_1)
+    set(MESA_EXISTING_SOURCE_HASH "${CMAKE_MATCH_1}")
+  endif()
+endif()
+
+set(MESA_HAS_REQUIRED_OUTPUTS OFF)
+if(EXISTS "${MESA_LLVMPIPE_FULL_ARCHIVE}" AND EXISTS "${MESA_LAVAPIPE_FULL_ARCHIVE}" AND EXISTS "${MESA_WEBVULKAN_DRIVER_ARCHIVE}")
+  set(MESA_HAS_REQUIRED_OUTPUTS ON)
+endif()
+
+set(MESA_REQUIRES_CONFIGURE OFF)
+if(NOT EXISTS "${MESA_BUILD_DIR}/build.ninja")
+  set(MESA_REQUIRES_CONFIGURE ON)
+elseif(NOT MESA_EXISTING_FORMAT STREQUAL MESA_BUILD_SIGNATURE_VERSION)
+  set(MESA_REQUIRES_CONFIGURE ON)
+elseif(NOT MESA_EXISTING_CONFIG_HASH STREQUAL MESA_CONFIG_SIGNATURE_HASH)
+  set(MESA_REQUIRES_CONFIGURE ON)
+endif()
+
+set(MESA_REQUIRES_COMPILE OFF)
+if(NOT MESA_HAS_REQUIRED_OUTPUTS)
+  set(MESA_REQUIRES_COMPILE ON)
+elseif(NOT MESA_EXISTING_FORMAT STREQUAL MESA_BUILD_SIGNATURE_VERSION)
+  set(MESA_REQUIRES_COMPILE ON)
+elseif(NOT MESA_EXISTING_SOURCE_HASH STREQUAL MESA_SOURCE_SIGNATURE_HASH)
+  set(MESA_REQUIRES_COMPILE ON)
+endif()
+
+if(NOT MESA_REQUIRES_CONFIGURE AND NOT MESA_REQUIRES_COMPILE)
+  message(STATUS "Mesa lavapipe wasm build is up to date")
+  return()
 endif()
 
 set(LLVM_PROVIDER_STAMP_FILE "${LLVM_WASM_INSTALL_DIR}/.webvulkan_llvm_provider.txt")
@@ -533,52 +596,56 @@ file(APPEND "${MESON_CROSS_FILE}" "[built-in options]\n")
 file(APPEND "${MESON_CROSS_FILE}" "c_args = ['-D_GNU_SOURCE=1']\n")
 file(APPEND "${MESON_CROSS_FILE}" "cpp_args = ['-D_GNU_SOURCE=1']\n")
 
-if(EXISTS "${MESA_BUILD_DIR}/build.ninja")
-  set(MESA_SETUP_COMMAND
-    setup "${MESA_BUILD_DIR}" "${MESA_SRC_DIR}" --reconfigure
+if(MESA_REQUIRES_CONFIGURE)
+  if(EXISTS "${MESA_BUILD_DIR}/build.ninja")
+    set(MESA_SETUP_COMMAND
+      setup "${MESA_BUILD_DIR}" "${MESA_SRC_DIR}" --reconfigure
+    )
+  else()
+    set(MESA_SETUP_COMMAND
+      setup "${MESA_BUILD_DIR}" "${MESA_SRC_DIR}"
+    )
+  endif()
+  list(APPEND MESA_SETUP_COMMAND
+    --native-file "${MESON_NATIVE_FILE}"
+    --cross-file "${MESON_CROSS_FILE}"
+    -Dgallium-drivers=llvmpipe
+    -Dvulkan-drivers=swrast
+    -Dplatforms=[]
+    -Dllvm=enabled
+    -Dshared-llvm=disabled
+    -Ddraw-use-llvm=true
+    -Dopengl=false
+    -Dgles1=disabled
+    -Dgles2=disabled
+    -Dgbm=disabled
+    -Degl=disabled
+    -Dglx=disabled
+    -Dglvnd=disabled
+    -Dxmlconfig=disabled
+    -Dzstd=disabled
+    -Dzlib=disabled
+    -Dshader-cache=disabled
+    -Dexpat=disabled
+    -Dbuild-tests=false
+    -Dtools=[]
+    -Dvideo-codecs=[]
+    -Dgallium-va=disabled
+    -Dbuildtype=release
   )
-else()
-  set(MESA_SETUP_COMMAND
-    setup "${MESA_BUILD_DIR}" "${MESA_SRC_DIR}"
+
+  run_checked(
+    LABEL "Configure Mesa lavapipe for wasm"
+    COMMAND "${EMCONFIGURE}" ${MESON_INVOKE} ${MESA_SETUP_COMMAND}
   )
 endif()
-list(APPEND MESA_SETUP_COMMAND
-  --native-file "${MESON_NATIVE_FILE}"
-  --cross-file "${MESON_CROSS_FILE}"
-  -Dgallium-drivers=llvmpipe
-  -Dvulkan-drivers=swrast
-  -Dplatforms=[]
-  -Dllvm=enabled
-  -Dshared-llvm=disabled
-  -Ddraw-use-llvm=true
-  -Dopengl=false
-  -Dgles1=disabled
-  -Dgles2=disabled
-  -Dgbm=disabled
-  -Degl=disabled
-  -Dglx=disabled
-  -Dglvnd=disabled
-  -Dxmlconfig=disabled
-  -Dzstd=disabled
-  -Dzlib=disabled
-  -Dshader-cache=disabled
-  -Dexpat=disabled
-  -Dbuild-tests=false
-  -Dtools=[]
-  -Dvideo-codecs=[]
-  -Dgallium-va=disabled
-  -Dbuildtype=release
-)
 
-run_checked(
-  LABEL "Configure Mesa lavapipe for wasm"
-  COMMAND "${EMCONFIGURE}" ${MESON_INVOKE} ${MESA_SETUP_COMMAND}
-)
-
-run_checked(
-  LABEL "Build Mesa lavapipe for wasm"
-  COMMAND "${EMMAKE}" ${MESON_INVOKE} compile -C "${MESA_BUILD_DIR}"
-)
+if(MESA_REQUIRES_COMPILE)
+  run_checked(
+    LABEL "Build Mesa lavapipe for wasm"
+    COMMAND "${EMMAKE}" ${MESON_INVOKE} compile -C "${MESA_BUILD_DIR}"
+  )
+endif()
 
 make_full_archive("${MESA_LLVMPIPE_THIN_ARCHIVE}" "${MESA_LLVMPIPE_FULL_ARCHIVE}" "${EMAR_BIN}")
 make_full_archive("${MESA_LAVAPIPE_THIN_ARCHIVE}" "${MESA_LAVAPIPE_FULL_ARCHIVE}" "${EMAR_BIN}")
@@ -604,5 +671,8 @@ if(NOT MESA_VULKAN_LVP_LIBS)
   message(FATAL_ERROR "Mesa build completed but libvulkan_lvp artifact is missing")
 endif()
 
-file(WRITE "${MESA_BUILD_STATE_FILE}" "${MESA_BUILD_SIGNATURE}")
+set(MESA_BUILD_STATE_CONTENT
+  "format=${MESA_BUILD_SIGNATURE_VERSION}\nconfig=${MESA_CONFIG_SIGNATURE_HASH}\nsource=${MESA_SOURCE_SIGNATURE_HASH}\n"
+)
+file(WRITE "${MESA_BUILD_STATE_FILE}" "${MESA_BUILD_STATE_CONTENT}")
 message(STATUS "Mesa lavapipe wasm build finished")
