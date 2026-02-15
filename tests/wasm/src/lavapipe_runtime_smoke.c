@@ -55,11 +55,20 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     return 25;
   }
 
+  printf("lavapipe runtime smoke ok\n");
+  printf("  backend=mesa lavapipe (swrast)\n");
+  printf("  instance.api=%u.%u.%u (%u)\n",
+         VK_API_VERSION_MAJOR(apiVersion),
+         VK_API_VERSION_MINOR(apiVersion),
+         VK_API_VERSION_PATCH(apiVersion),
+         apiVersion);
+  printf("  vkCreateInstance=ok\n");
+  printf("  vkEnumeratePhysicalDevices=ok\n");
+  printf("  physical_devices=%u\n", physicalDeviceCount);
   destroyInstance(instance, 0);
-  printf("lavapipe runtime smoke ok api=%u devices=%u\n", apiVersion, physicalDeviceCount);
   return 0;
 }
 
 int main(void) {
-  return lavapipe_runtime_smoke();
+  return 0;
 }

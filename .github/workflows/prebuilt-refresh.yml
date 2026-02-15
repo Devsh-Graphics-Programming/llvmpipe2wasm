@@ -18,6 +18,7 @@ env:
   BUILD_TYPE: Release
   CMAKE_GENERATOR: Ninja
   WEBVULKAN_REFRESH_CACHE_VERSION: v1
+  WEBVULKAN_CCACHE_VERSION: v1
   LLVM_RELEASE_TAG: llvm-wasm-prebuilt-latest
   PACKAGE_RELEASE_TAG: webvulkan-package-latest
 
@@ -26,6 +27,14 @@ jobs:
     name: refresh prebuilt bundles
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_NOHASHDIR: "true"
+      EM_COMPILER_WRAPPER: ccache
+      CC: ccache gcc
+      CXX: ccache g++
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +44,7 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build flex bison python3-pip glslang-tools
+          sudo apt-get install -y ninja-build flex bison python3-pip glslang-tools ccache
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==4.2.0
 
@@ -60,6 +69,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-webvulkan-refresh-build-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-
 
+      - name: Restore ccache
+        id: cache_ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .ccache
+          key: ${{ runner.os }}-webvulkan-refresh-ccache-${{ env.WEBVULKAN_CCACHE_VERSION }}-${{ hashFiles('cmake/BuildMesaLlvmpipeWasm.cmake', 'cmake/toolchains/WebVulkanEmscripten.cmake') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-webvulkan-refresh-ccache-${{ env.WEBVULKAN_CCACHE_VERSION }}-${{ hashFiles('cmake/BuildMesaLlvmpipeWasm.cmake', 'cmake/toolchains/WebVulkanEmscripten.cmake') }}-
+            ${{ runner.os }}-webvulkan-refresh-ccache-${{ env.WEBVULKAN_CCACHE_VERSION }}-
+
+      - name: Configure ccache
+        shell: bash
+        run: |
+          mkdir -p "${CCACHE_DIR}"
+          ccache --set-config=cache_dir="${CCACHE_DIR}"
+          ccache --set-config=max_size=10G
+          ccache --set-config=compression=true
+          ccache --zero-stats
+          ccache --show-stats
+
       - name: Configure latest source refresh build
         run: |
           cmake -S . -B build_refresh -G "${CMAKE_GENERATOR}" \
@@ -79,6 +109,11 @@ jobs:
       - name: Install relocatable package
         run: |
           cmake --install build_refresh --prefix package_refresh
+
+      - name: Print ccache stats
+        if: always()
+        run: |
+          ccache --show-stats
 
       - name: Pack LLVM and package bundles
         run: |
@@ -226,6 +261,14 @@ jobs:
             build_refresh/_webvulkan
             build_refresh/.webvulkan_llvmpipe.stamp
           key: ${{ steps.cache_build.outputs.cache-primary-key }}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .ccache
+          key: ${{ steps.cache_ccache.outputs.cache-primary-key }}
 
       - name: Save third-party cache
         if: always() && steps.cache_thirdparty.outputs.cache-hit != 'true'
