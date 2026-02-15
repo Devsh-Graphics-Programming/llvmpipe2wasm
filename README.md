@@ -78,6 +78,17 @@ add_executable(my_app src/main.c)
 target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
 ```
 
+## Volk smoke path
+
+`runtime_smoke` includes a dedicated Volk-based runtime check.
+
+It validates:
+- `volkInitializeCustom` is used with `vk_icdGetInstanceProcAddr` from the linked wasm driver archive
+- Vulkan instance creation and physical device enumeration succeed
+- Required ICD entrypoints are resolved through that same dispatch path
+
+This gives a realistic loader flow for consumers that use Volk, while keeping dispatch pinned to the wasm ICD path.
+
 ## Release channels
 
 - `llvm-wasm-prebuilt-latest` contains only the LLVM prebuilt bundle
