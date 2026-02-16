@@ -47,6 +47,20 @@ Why we use a fork:
 - Current patch scope is focused on lavapipe build behavior for Emscripten so the driver can be consumed in our wasm flow.
 - Non-Emscripten paths remain unchanged.
 
+## Shader toolchain direction
+
+Why not LLVM JIT-in-Wasm right now:
+- LLVM maintainer discussion: `https://discourse.llvm.org/t/rfc-building-llvm-for-webassembly/79073`
+- In this project setup, a production-grade in-process LLVM JIT path inside the Wasm sandbox is not currently a practical path.
+
+Why not full NIR->Wasm backend today:
+- Mesa does not ship a complete NIR->Wasm backend for this use case.
+- We built a simple proof-of-concept for a minimal pattern, but a full backend from scratch is a large compiler project and not realistic for a single maintainer effort.
+
+Current strategy:
+- Keep `clang_wasm_runtime_smoke` as a clang-in-wasm toolchain proof path.
+- Keep Vulkan runtime validation on the current Mesa wasm execution path, while preparing a future direct integration path.
+
 ## Default dependency mode
 
 Default configuration uses the latest prebuilt LLVM bundle from this repository:
@@ -102,6 +116,14 @@ It validates:
 - Required ICD entrypoints are resolved through that same dispatch path
 
 This gives a realistic loader flow for consumers that use Volk, while keeping dispatch pinned to the wasm ICD path.
+
+`smoke_poc_nir_to_wasm` is kept as an experimental proof-of-concept path and is not the main production direction.
+
+Current shader-path split:
+- `lavapipe_runtime_smoke` validates Vulkan compute dispatch in the Mesa wasm driver.
+- `clang_wasm_runtime_smoke` validates the clang-in-wasm toolchain path and reports `spirv_probe` status.
+- Current `clang/clang` runtime package does not include `llvm-spirv`, so direct clang-in-wasm -> SPIR-V for Vulkan shaders is currently unavailable in this smoke.
+- `smoke_poc_nir_to_wasm` is a separate experimental check and is not part of `runtime_smoke`.
 
 ## Release channels
 

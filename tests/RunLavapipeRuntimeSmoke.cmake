@@ -13,6 +13,9 @@ require_var(SMOKE_JS_OUT)
 require_var(SMOKE_SCRIPT)
 require_var(VOLK_INCLUDE_DIR)
 require_var(VOLK_SOURCE)
+if(NOT DEFINED SMOKE_EXPORT OR "${SMOKE_EXPORT}" STREQUAL "")
+  set(SMOKE_EXPORT "_lavapipe_runtime_smoke")
+endif()
 
 if(DEFINED SMOKE_INCLUDE_DIRS_SERIALIZED AND NOT "${SMOKE_INCLUDE_DIRS_SERIALIZED}" STREQUAL "")
   string(REPLACE "|" ";" SMOKE_INCLUDE_DIRS "${SMOKE_INCLUDE_DIRS_SERIALIZED}")
@@ -73,7 +76,7 @@ append_rsp("-sALLOW_MEMORY_GROWTH=1")
 append_rsp("-sMODULARIZE=1")
 append_rsp("-sEXPORT_ES6=1")
 append_rsp("-sENVIRONMENT=web,worker,node")
-append_rsp("-sEXPORTED_FUNCTIONS=['_main','_lavapipe_runtime_smoke']")
+append_rsp("-sEXPORTED_FUNCTIONS=['_main','${SMOKE_EXPORT}']")
 append_rsp("-sEXPORTED_RUNTIME_METHODS=['ccall']")
 append_rsp("-sMAIN_MODULE=2")
 append_rsp("-sALLOW_TABLE_GROWTH=1")
@@ -94,7 +97,7 @@ endif()
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
     "SMOKE_MODULE=${SMOKE_JS_OUT}"
-    "SMOKE_EXPORT=_lavapipe_runtime_smoke"
+    "SMOKE_EXPORT=${SMOKE_EXPORT}"
     "${NODE_EXE}" "${SMOKE_SCRIPT}"
   RESULT_VARIABLE SMOKE_RUN_RESULT
 )
