@@ -171,6 +171,7 @@ set(_webvulkan_lavapipe_depends
 if(_webvulkan_test_mode STREQUAL "in-tree")
   list(APPEND _webvulkan_lavapipe_depends llvmpipe_wasm_spike)
 endif()
+list(JOIN _webvulkan_smoke_include_dirs "|" _webvulkan_smoke_include_dirs_serialized)
 
 add_custom_command(
   OUTPUT "${WEBVULKAN_LAVAPIPE_SMOKE_OK}"
@@ -178,7 +179,7 @@ add_custom_command(
     "${CMAKE_COMMAND}"
     -DEMSDK_ROOT=${EMSDK_ROOT}
     -DDRIVER_ARCHIVE=${_webvulkan_driver_archive}
-    -DSMOKE_INCLUDE_DIRS=${_webvulkan_smoke_include_dirs}
+    -DSMOKE_INCLUDE_DIRS_SERIALIZED=${_webvulkan_smoke_include_dirs_serialized}
     -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c
     -DSMOKE_JS_OUT=${WEBVULKAN_LAVAPIPE_SMOKE_JS}
     -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs

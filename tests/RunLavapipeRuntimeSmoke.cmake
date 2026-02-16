@@ -8,12 +8,16 @@ endfunction()
 
 require_var(EMSDK_ROOT)
 require_var(DRIVER_ARCHIVE)
-require_var(SMOKE_INCLUDE_DIRS)
 require_var(SMOKE_SOURCE)
 require_var(SMOKE_JS_OUT)
 require_var(SMOKE_SCRIPT)
 require_var(VOLK_INCLUDE_DIR)
 require_var(VOLK_SOURCE)
+
+if(DEFINED SMOKE_INCLUDE_DIRS_SERIALIZED AND NOT "${SMOKE_INCLUDE_DIRS_SERIALIZED}" STREQUAL "")
+  string(REPLACE "|" ";" SMOKE_INCLUDE_DIRS "${SMOKE_INCLUDE_DIRS_SERIALIZED}")
+endif()
+require_var(SMOKE_INCLUDE_DIRS)
 
 if(CMAKE_HOST_WIN32)
   set(EMCC_BIN "${EMSDK_ROOT}/upstream/emscripten/emcc.bat")
