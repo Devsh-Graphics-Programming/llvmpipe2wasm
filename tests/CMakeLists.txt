@@ -4,6 +4,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(webvulkan_tests LANGUAGES NONE)
 endif()
 
+if(NOT DEFINED WASM_AUTO_FETCH_TOOLS)
+  set(WASM_AUTO_FETCH_TOOLS ON CACHE BOOL "Auto-download missing tools during configure")
+endif()
+
 set(WEBVULKAN_TEST_THIRDPARTY_DIR "${CMAKE_CURRENT_LIST_DIR}/../.3rdparty/tests" CACHE PATH "Test-only third-party root directory")
 set(WEBVULKAN_THIRDPARTY_STATE_DIR "${CMAKE_CURRENT_LIST_DIR}/../.3rdparty/.state" CACHE PATH "State directory for fetched third-party metadata")
 set(WEBVULKAN_VOLK_GIT_URL "https://github.com/zeux/volk.git" CACHE STRING "volk git repository URL for smoke tests")
@@ -14,6 +18,8 @@ set(WEBVULKAN_TEST_MODE "auto" CACHE STRING "Test mode: auto, in-tree, or packag
 set_property(CACHE WEBVULKAN_TEST_MODE PROPERTY STRINGS auto in-tree package)
 set(WEBVULKAN_TEST_PACKAGE_PREFIX "" CACHE PATH "Install prefix for WebVulkan package mode")
 set(WEBVULKAN_TEST_WASM_BUILD_DIR "${CMAKE_BINARY_DIR}/wasm" CACHE PATH "WASM smoke build directory")
+set(WEBVULKAN_TEST_NODE_BIN "" CACHE FILEPATH "Path to node executable used by runtime smoke scripts")
+set(WEBVULKAN_WASMER_BIN "" CACHE FILEPATH "Path to wasmer executable used by clang wasm runtime smoke")
 
 if(NOT COMMAND CPMAddPackage)
   if(NOT DEFINED WEBVULKAN_CPM_VERSION OR WEBVULKAN_CPM_VERSION STREQUAL "")
@@ -102,6 +108,87 @@ endif()
 if(NOT SUBBUILD_GENERATOR)
   message(FATAL_ERROR "No CMake generator is available for wasm smoke sub-build")
 endif()
+
+set(_webvulkan_node_hints)
+file(GLOB _webvulkan_node_candidates
+  "${EMSDK_ROOT}/node/*/bin/node"
+  "${EMSDK_ROOT}/node/*/bin/node.exe"
+)
+if(_webvulkan_node_candidates)
+  list(SORT _webvulkan_node_candidates COMPARE NATURAL ORDER DESCENDING)
+  list(GET _webvulkan_node_candidates 0 _webvulkan_emsdk_node_exe)
+  get_filename_component(_webvulkan_emsdk_node_dir "${_webvulkan_emsdk_node_exe}" DIRECTORY)
+  list(APPEND _webvulkan_node_hints "${_webvulkan_emsdk_node_dir}")
+endif()
+if(CMAKE_HOST_WIN32)
+  if(DEFINED ENV{ProgramFiles} AND NOT "$ENV{ProgramFiles}" STREQUAL "")
+    list(APPEND _webvulkan_node_hints "$ENV{ProgramFiles}/nodejs")
+  endif()
+  if(DEFINED ENV{ProgramW6432} AND NOT "$ENV{ProgramW6432}" STREQUAL "")
+    list(APPEND _webvulkan_node_hints "$ENV{ProgramW6432}/nodejs")
+  endif()
+  if(DEFINED ENV{LOCALAPPDATA} AND NOT "$ENV{LOCALAPPDATA}" STREQUAL "")
+    list(APPEND _webvulkan_node_hints "$ENV{LOCALAPPDATA}/Programs/nodejs")
+  endif()
+endif()
+
+if(NOT WEBVULKAN_TEST_NODE_BIN OR WEBVULKAN_TEST_NODE_BIN MATCHES "-NOTFOUND$")
+  unset(WEBVULKAN_TEST_NODE_BIN CACHE)
+  find_program(WEBVULKAN_TEST_NODE_BIN NAMES node node.exe nodejs nodejs.exe HINTS ${_webvulkan_node_hints})
+endif()
+if(NOT WEBVULKAN_TEST_NODE_BIN OR NOT EXISTS "${WEBVULKAN_TEST_NODE_BIN}")
+  message(FATAL_ERROR "node executable is required for runtime smoke scripts")
+endif()
+set(WEBVULKAN_TEST_NODE_BIN "${WEBVULKAN_TEST_NODE_BIN}" CACHE FILEPATH "Path to node executable used by runtime smoke scripts" FORCE)
+
+set(_webvulkan_home_dir "")
+if(WIN32 AND DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
+  set(_webvulkan_home_dir "$ENV{USERPROFILE}")
+elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+  set(_webvulkan_home_dir "$ENV{HOME}")
+endif()
+
+set(_webvulkan_wasmer_hints)
+if(_webvulkan_home_dir)
+  list(APPEND _webvulkan_wasmer_hints "${_webvulkan_home_dir}/.wasmer/bin")
+endif()
+if(WIN32)
+  list(APPEND _webvulkan_wasmer_hints
+    "C:/Program Files/Wasmer/bin"
+    "C:/Program Files (x86)/Wasmer/bin"
+  )
+endif()
+
+if(NOT WEBVULKAN_WASMER_BIN OR WEBVULKAN_WASMER_BIN MATCHES "-NOTFOUND$")
+  unset(WEBVULKAN_WASMER_BIN CACHE)
+  find_program(WEBVULKAN_WASMER_BIN NAMES wasmer wasmer.exe HINTS ${_webvulkan_wasmer_hints})
+endif()
+if((NOT WEBVULKAN_WASMER_BIN OR NOT EXISTS "${WEBVULKAN_WASMER_BIN}") AND _webvulkan_home_dir)
+  if(CMAKE_HOST_WIN32)
+    set(_webvulkan_wasmer_default "${_webvulkan_home_dir}/.wasmer/bin/wasmer.exe")
+  else()
+    set(_webvulkan_wasmer_default "${_webvulkan_home_dir}/.wasmer/bin/wasmer")
+  endif()
+  if(EXISTS "${_webvulkan_wasmer_default}")
+    set(WEBVULKAN_WASMER_BIN "${_webvulkan_wasmer_default}")
+  endif()
+endif()
+
+if((NOT WEBVULKAN_WASMER_BIN OR NOT EXISTS "${WEBVULKAN_WASMER_BIN}") AND WASM_AUTO_FETCH_TOOLS)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_LIST_DIR}/BootstrapWasmer.cmake"
+    RESULT_VARIABLE _webvulkan_bootstrap_wasmer_result
+  )
+  if(NOT _webvulkan_bootstrap_wasmer_result EQUAL 0)
+    message(FATAL_ERROR "Failed to bootstrap wasmer runtime")
+  endif()
+  find_program(WEBVULKAN_WASMER_BIN NAMES wasmer wasmer.exe HINTS ${_webvulkan_wasmer_hints})
+endif()
+
+if(NOT WEBVULKAN_WASMER_BIN OR NOT EXISTS "${WEBVULKAN_WASMER_BIN}")
+  message(FATAL_ERROR "wasmer executable is required for clang wasm runtime smoke")
+endif()
+set(WEBVULKAN_WASMER_BIN "${WEBVULKAN_WASMER_BIN}" CACHE FILEPATH "Path to wasmer executable used by clang wasm runtime smoke" FORCE)
 
 if(NOT COMMAND webvulkan_fetch_git_source)
   set(_webvulkan_root_fetch_sources "${CMAKE_CURRENT_LIST_DIR}/../cmake/FetchWebVulkanSources.cmake")
@@ -208,6 +295,7 @@ add_custom_command(
     -DSMOKE_INCLUDE_DIRS_SERIALIZED=${_webvulkan_smoke_include_dirs_serialized}
     -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c
     -DSMOKE_JS_OUT=${WEBVULKAN_LAVAPIPE_SMOKE_JS}
+    -DSMOKE_EXPORT=_lavapipe_runtime_smoke
     -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
     -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
     -DVOLK_SOURCE=${_webvulkan_volk_source}
@@ -219,5 +307,53 @@ add_custom_command(
 )
 add_custom_target(lavapipe_runtime_smoke DEPENDS "${WEBVULKAN_LAVAPIPE_SMOKE_OK}")
 
+set(WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK "${CMAKE_BINARY_DIR}/poc_nir_to_wasm_smoke.ok")
+set(WEBVULKAN_POC_NIR_TO_WASM_SMOKE_JS "${CMAKE_BINARY_DIR}/lavapipe-smoke/poc_nir_to_wasm_smoke.js")
+set(_webvulkan_poc_nir_to_wasm_depends
+  "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
+  "${CMAKE_CURRENT_LIST_DIR}/wasm/src/poc_nir_to_wasm_smoke.c"
+  "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs"
+  "${_webvulkan_volk_source}"
+  "${_webvulkan_volk_header}"
+  "${_webvulkan_driver_archive}"
+)
+if(_webvulkan_test_mode STREQUAL "in-tree")
+  list(APPEND _webvulkan_poc_nir_to_wasm_depends llvmpipe_wasm_spike)
+endif()
+add_custom_command(
+  OUTPUT "${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK}"
+  COMMAND
+    "${CMAKE_COMMAND}"
+    -DEMSDK_ROOT=${EMSDK_ROOT}
+    -DDRIVER_ARCHIVE=${_webvulkan_driver_archive}
+    -DSMOKE_INCLUDE_DIRS_SERIALIZED=${_webvulkan_smoke_include_dirs_serialized}
+    -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/poc_nir_to_wasm_smoke.c
+    -DSMOKE_JS_OUT=${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_JS}
+    -DSMOKE_EXPORT=_poc_nir_to_wasm_smoke
+    -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
+    -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
+    -DVOLK_SOURCE=${_webvulkan_volk_source}
+    -P "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
+  COMMAND "${CMAKE_COMMAND}" -E touch "${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK}"
+  DEPENDS ${_webvulkan_poc_nir_to_wasm_depends}
+  USES_TERMINAL
+  VERBATIM
+)
+add_custom_target(smoke_poc_nir_to_wasm DEPENDS "${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK}")
+
+set(WEBVULKAN_CLANG_WASM_SMOKE_OK "${CMAKE_BINARY_DIR}/clang_wasm_runtime_smoke.ok")
+add_custom_command(
+  OUTPUT "${WEBVULKAN_CLANG_WASM_SMOKE_OK}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E env
+    "WEBVULKAN_WASMER_BIN=${WEBVULKAN_WASMER_BIN}"
+    "${WEBVULKAN_TEST_NODE_BIN}" "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/clang_wasm_runtime_smoke.mjs"
+  COMMAND "${CMAKE_COMMAND}" -E touch "${WEBVULKAN_CLANG_WASM_SMOKE_OK}"
+  DEPENDS "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/clang_wasm_runtime_smoke.mjs"
+  USES_TERMINAL
+  VERBATIM
+)
+add_custom_target(clang_wasm_runtime_smoke DEPENDS "${WEBVULKAN_CLANG_WASM_SMOKE_OK}")
+
 add_custom_target(runtime_smoke)
-add_dependencies(runtime_smoke wasm_runtime_smoke lavapipe_runtime_smoke)
+add_dependencies(runtime_smoke wasm_runtime_smoke lavapipe_runtime_smoke clang_wasm_runtime_smoke)
