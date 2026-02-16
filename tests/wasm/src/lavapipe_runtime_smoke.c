@@ -72,6 +72,18 @@ static const uint32_t kSmokeComputeSpirv[] = {
   0x0000000bu, 0x0003003eu, 0x0000000eu, 0x0000000cu, 0x000100fdu, 0x00010038u
 };
 
+static const uint32_t kDispatchNoopSpirv[] = {
+  0x07230203u, 0x00010000u, 0x0008000bu, 0x0000000au, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+  0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+  0x0005000fu, 0x00000005u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00060010u, 0x00000004u, 0x00000011u,
+  0x00000001u, 0x00000001u, 0x00000001u, 0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u,
+  0x6e69616du, 0x00000000u, 0x00040047u, 0x00000009u, 0x0000000bu, 0x00000019u, 0x00020013u, 0x00000002u,
+  0x00030021u, 0x00000003u, 0x00000002u, 0x00040015u, 0x00000006u, 0x00000020u, 0x00000000u, 0x00040017u,
+  0x00000007u, 0x00000006u, 0x00000003u, 0x0004002bu, 0x00000006u, 0x00000008u, 0x00000001u, 0x0006002cu,
+  0x00000007u, 0x00000009u, 0x00000008u, 0x00000008u, 0x00000008u, 0x00050036u, 0x00000002u, 0x00000004u,
+  0x00000000u, 0x00000003u, 0x000200f8u, 0x00000005u, 0x000100fdu, 0x00010038u
+};
+
 struct webvulkan_nir_wasm_pattern {
   uint32_t ssbo_index;
   uint32_t store_offset_bytes;
@@ -432,9 +444,16 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   VkInstance instance = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
   VkShaderModule shaderModule = VK_NULL_HANDLE;
+  VkShaderModule dispatchShaderModule = VK_NULL_HANDLE;
   VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
   VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
   VkPipeline computePipeline = VK_NULL_HANDLE;
+  VkPipelineLayout dispatchPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline dispatchPipeline = VK_NULL_HANDLE;
+  VkCommandPool commandPool = VK_NULL_HANDLE;
+  VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+  VkFence submitFence = VK_NULL_HANDLE;
+  VkQueue queue = VK_NULL_HANDLE;
   struct webvulkan_nir_wasm_pattern nirWasmPattern;
   uint8_t* nirWasmModuleBytes = 0;
   size_t nirWasmModuleSize = 0u;
@@ -451,6 +470,18 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   PFN_vkDestroyPipelineLayout pfnDestroyPipelineLayout = 0;
   PFN_vkCreateComputePipelines pfnCreateComputePipelines = 0;
   PFN_vkDestroyPipeline pfnDestroyPipeline = 0;
+  PFN_vkGetDeviceQueue pfnGetDeviceQueue = 0;
+  PFN_vkCreateCommandPool pfnCreateCommandPool = 0;
+  PFN_vkDestroyCommandPool pfnDestroyCommandPool = 0;
+  PFN_vkAllocateCommandBuffers pfnAllocateCommandBuffers = 0;
+  PFN_vkBeginCommandBuffer pfnBeginCommandBuffer = 0;
+  PFN_vkEndCommandBuffer pfnEndCommandBuffer = 0;
+  PFN_vkCmdBindPipeline pfnCmdBindPipeline = 0;
+  PFN_vkCmdDispatch pfnCmdDispatch = 0;
+  PFN_vkCreateFence pfnCreateFence = 0;
+  PFN_vkDestroyFence pfnDestroyFence = 0;
+  PFN_vkQueueSubmit pfnQueueSubmit = 0;
+  PFN_vkWaitForFences pfnWaitForFences = 0;
 
   memset(&nirWasmPattern, 0, sizeof(nirWasmPattern));
 
@@ -584,6 +615,30 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
                                                        (PFN_vkCreateComputePipelines)vkGetDeviceProcAddr(device, "vkCreateComputePipelines");
   pfnDestroyPipeline = vkDestroyPipeline ? vkDestroyPipeline :
                                           (PFN_vkDestroyPipeline)vkGetDeviceProcAddr(device, "vkDestroyPipeline");
+  pfnGetDeviceQueue = vkGetDeviceQueue ? vkGetDeviceQueue :
+                                       (PFN_vkGetDeviceQueue)vkGetDeviceProcAddr(device, "vkGetDeviceQueue");
+  pfnCreateCommandPool = vkCreateCommandPool ? vkCreateCommandPool :
+                                            (PFN_vkCreateCommandPool)vkGetDeviceProcAddr(device, "vkCreateCommandPool");
+  pfnDestroyCommandPool = vkDestroyCommandPool ? vkDestroyCommandPool :
+                                             (PFN_vkDestroyCommandPool)vkGetDeviceProcAddr(device, "vkDestroyCommandPool");
+  pfnAllocateCommandBuffers = vkAllocateCommandBuffers ? vkAllocateCommandBuffers :
+                                                (PFN_vkAllocateCommandBuffers)vkGetDeviceProcAddr(device, "vkAllocateCommandBuffers");
+  pfnBeginCommandBuffer = vkBeginCommandBuffer ? vkBeginCommandBuffer :
+                                              (PFN_vkBeginCommandBuffer)vkGetDeviceProcAddr(device, "vkBeginCommandBuffer");
+  pfnEndCommandBuffer = vkEndCommandBuffer ? vkEndCommandBuffer :
+                                          (PFN_vkEndCommandBuffer)vkGetDeviceProcAddr(device, "vkEndCommandBuffer");
+  pfnCmdBindPipeline = vkCmdBindPipeline ? vkCmdBindPipeline :
+                                        (PFN_vkCmdBindPipeline)vkGetDeviceProcAddr(device, "vkCmdBindPipeline");
+  pfnCmdDispatch = vkCmdDispatch ? vkCmdDispatch :
+                                (PFN_vkCmdDispatch)vkGetDeviceProcAddr(device, "vkCmdDispatch");
+  pfnCreateFence = vkCreateFence ? vkCreateFence :
+                                (PFN_vkCreateFence)vkGetDeviceProcAddr(device, "vkCreateFence");
+  pfnDestroyFence = vkDestroyFence ? vkDestroyFence :
+                                  (PFN_vkDestroyFence)vkGetDeviceProcAddr(device, "vkDestroyFence");
+  pfnQueueSubmit = vkQueueSubmit ? vkQueueSubmit :
+                                (PFN_vkQueueSubmit)vkGetDeviceProcAddr(device, "vkQueueSubmit");
+  pfnWaitForFences = vkWaitForFences ? vkWaitForFences :
+                                    (PFN_vkWaitForFences)vkGetDeviceProcAddr(device, "vkWaitForFences");
 
   if (!pfnDestroyDevice || !pfnCreateShaderModule || !pfnDestroyShaderModule || !pfnCreatePipelineLayout ||
       !pfnDestroyPipelineLayout || !pfnCreateComputePipelines || !pfnDestroyPipeline ||
@@ -599,6 +654,25 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     printf("  vkCreateComputePipelines=%s\n", pfnCreateComputePipelines ? "present" : "missing");
     printf("  vkDestroyPipeline=%s\n", pfnDestroyPipeline ? "present" : "missing");
     smokeRc = 31;
+    goto cleanup;
+  }
+  if (!pfnGetDeviceQueue || !pfnCreateCommandPool || !pfnDestroyCommandPool || !pfnAllocateCommandBuffers ||
+      !pfnBeginCommandBuffer || !pfnEndCommandBuffer || !pfnCmdBindPipeline || !pfnCmdDispatch ||
+      !pfnCreateFence || !pfnDestroyFence || !pfnQueueSubmit || !pfnWaitForFences) {
+    printf("lavapipe runtime smoke missing dispatch entrypoints\n");
+    printf("  vkGetDeviceQueue=%s\n", pfnGetDeviceQueue ? "present" : "missing");
+    printf("  vkCreateCommandPool=%s\n", pfnCreateCommandPool ? "present" : "missing");
+    printf("  vkDestroyCommandPool=%s\n", pfnDestroyCommandPool ? "present" : "missing");
+    printf("  vkAllocateCommandBuffers=%s\n", pfnAllocateCommandBuffers ? "present" : "missing");
+    printf("  vkBeginCommandBuffer=%s\n", pfnBeginCommandBuffer ? "present" : "missing");
+    printf("  vkEndCommandBuffer=%s\n", pfnEndCommandBuffer ? "present" : "missing");
+    printf("  vkCmdBindPipeline=%s\n", pfnCmdBindPipeline ? "present" : "missing");
+    printf("  vkCmdDispatch=%s\n", pfnCmdDispatch ? "present" : "missing");
+    printf("  vkCreateFence=%s\n", pfnCreateFence ? "present" : "missing");
+    printf("  vkDestroyFence=%s\n", pfnDestroyFence ? "present" : "missing");
+    printf("  vkQueueSubmit=%s\n", pfnQueueSubmit ? "present" : "missing");
+    printf("  vkWaitForFences=%s\n", pfnWaitForFences ? "present" : "missing");
+    smokeRc = 36;
     goto cleanup;
   }
 
@@ -664,6 +738,127 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     goto cleanup;
   }
 
+  VkShaderModuleCreateInfo dispatchShaderCreateInfo;
+  memset(&dispatchShaderCreateInfo, 0, sizeof(dispatchShaderCreateInfo));
+  dispatchShaderCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  dispatchShaderCreateInfo.codeSize = sizeof(kDispatchNoopSpirv);
+  dispatchShaderCreateInfo.pCode = kDispatchNoopSpirv;
+
+  rc = pfnCreateShaderModule(device, &dispatchShaderCreateInfo, 0, &dispatchShaderModule);
+  if (rc != VK_SUCCESS || dispatchShaderModule == VK_NULL_HANDLE) {
+    smokeRc = 58;
+    goto cleanup;
+  }
+
+  VkPipelineLayoutCreateInfo dispatchPipelineLayoutCreateInfo;
+  memset(&dispatchPipelineLayoutCreateInfo, 0, sizeof(dispatchPipelineLayoutCreateInfo));
+  dispatchPipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  dispatchPipelineLayoutCreateInfo.setLayoutCount = 0u;
+  dispatchPipelineLayoutCreateInfo.pSetLayouts = 0;
+
+  rc = pfnCreatePipelineLayout(device, &dispatchPipelineLayoutCreateInfo, 0, &dispatchPipelineLayout);
+  if (rc != VK_SUCCESS || dispatchPipelineLayout == VK_NULL_HANDLE) {
+    smokeRc = 59;
+    goto cleanup;
+  }
+
+  VkPipelineShaderStageCreateInfo dispatchShaderStage;
+  memset(&dispatchShaderStage, 0, sizeof(dispatchShaderStage));
+  dispatchShaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  dispatchShaderStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  dispatchShaderStage.module = dispatchShaderModule;
+  dispatchShaderStage.pName = "main";
+
+  VkComputePipelineCreateInfo dispatchPipelineCreateInfo;
+  memset(&dispatchPipelineCreateInfo, 0, sizeof(dispatchPipelineCreateInfo));
+  dispatchPipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  dispatchPipelineCreateInfo.stage = dispatchShaderStage;
+  dispatchPipelineCreateInfo.layout = dispatchPipelineLayout;
+
+  rc = pfnCreateComputePipelines(device, VK_NULL_HANDLE, 1u, &dispatchPipelineCreateInfo, 0, &dispatchPipeline);
+  if (rc != VK_SUCCESS || dispatchPipeline == VK_NULL_HANDLE) {
+    smokeRc = 60;
+    goto cleanup;
+  }
+
+  pfnGetDeviceQueue(device, queueFamilyIndex, 0u, &queue);
+  if (queue == VK_NULL_HANDLE) {
+    smokeRc = 61;
+    goto cleanup;
+  }
+
+  VkCommandPoolCreateInfo commandPoolCreateInfo;
+  memset(&commandPoolCreateInfo, 0, sizeof(commandPoolCreateInfo));
+  commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndex;
+  commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+  rc = pfnCreateCommandPool(device, &commandPoolCreateInfo, 0, &commandPool);
+  if (rc != VK_SUCCESS || commandPool == VK_NULL_HANDLE) {
+    smokeRc = 62;
+    goto cleanup;
+  }
+
+  VkCommandBufferAllocateInfo commandBufferAllocateInfo;
+  memset(&commandBufferAllocateInfo, 0, sizeof(commandBufferAllocateInfo));
+  commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  commandBufferAllocateInfo.commandPool = commandPool;
+  commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  commandBufferAllocateInfo.commandBufferCount = 1u;
+
+  rc = pfnAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer);
+  if (rc != VK_SUCCESS || commandBuffer == VK_NULL_HANDLE) {
+    smokeRc = 63;
+    goto cleanup;
+  }
+
+  VkCommandBufferBeginInfo commandBufferBeginInfo;
+  memset(&commandBufferBeginInfo, 0, sizeof(commandBufferBeginInfo));
+  commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+  rc = pfnBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo);
+  if (rc != VK_SUCCESS) {
+    smokeRc = 64;
+    goto cleanup;
+  }
+
+  pfnCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, dispatchPipeline);
+  pfnCmdDispatch(commandBuffer, 1u, 1u, 1u);
+
+  rc = pfnEndCommandBuffer(commandBuffer);
+  if (rc != VK_SUCCESS) {
+    smokeRc = 65;
+    goto cleanup;
+  }
+
+  VkFenceCreateInfo fenceCreateInfo;
+  memset(&fenceCreateInfo, 0, sizeof(fenceCreateInfo));
+  fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  rc = pfnCreateFence(device, &fenceCreateInfo, 0, &submitFence);
+  if (rc != VK_SUCCESS || submitFence == VK_NULL_HANDLE) {
+    smokeRc = 66;
+    goto cleanup;
+  }
+
+  VkSubmitInfo submitInfo;
+  memset(&submitInfo, 0, sizeof(submitInfo));
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.commandBufferCount = 1u;
+  submitInfo.pCommandBuffers = &commandBuffer;
+
+  rc = pfnQueueSubmit(queue, 1u, &submitInfo, submitFence);
+  if (rc != VK_SUCCESS) {
+    smokeRc = 67;
+    goto cleanup;
+  }
+
+  rc = pfnWaitForFences(device, 1u, &submitFence, VK_TRUE, UINT64_MAX);
+  if (rc != VK_SUCCESS) {
+    smokeRc = 68;
+    goto cleanup;
+  }
+
   nirWasmCompileResult = webvulkan_compile_spirv_nir_to_wasm(
     kSmokeComputeSpirv,
     sizeof(kSmokeComputeSpirv) / sizeof(kSmokeComputeSpirv[0]),
@@ -709,7 +904,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("  vulkan_loader=volk (custom vk_icdGetInstanceProcAddr)\n");
   printf("  shader.create_module=ok\n");
   printf("  shader.create_compute_pipeline=ok\n");
-  printf("  shader.dispatch=not_executed (llvmpipe wasm runtime path pending)\n");
+  printf("  shader.dispatch=ok\n");
   printf("  nir_to_wasm.spirv_to_nir=ok\n");
   printf("  nir_to_wasm.ssbo_index=%u\n", nirWasmPattern.ssbo_index);
   printf("  nir_to_wasm.store_offset=%u\n", nirWasmPattern.store_offset_bytes);
@@ -725,6 +920,21 @@ cleanup:
     nirWasmModuleBytes = 0;
   }
   if (device != VK_NULL_HANDLE) {
+    if (submitFence != VK_NULL_HANDLE && pfnDestroyFence) {
+      pfnDestroyFence(device, submitFence, 0);
+    }
+    if (commandPool != VK_NULL_HANDLE && pfnDestroyCommandPool) {
+      pfnDestroyCommandPool(device, commandPool, 0);
+    }
+    if (dispatchPipeline != VK_NULL_HANDLE && pfnDestroyPipeline) {
+      pfnDestroyPipeline(device, dispatchPipeline, 0);
+    }
+    if (dispatchPipelineLayout != VK_NULL_HANDLE && pfnDestroyPipelineLayout) {
+      pfnDestroyPipelineLayout(device, dispatchPipelineLayout, 0);
+    }
+    if (dispatchShaderModule != VK_NULL_HANDLE && pfnDestroyShaderModule) {
+      pfnDestroyShaderModule(device, dispatchShaderModule, 0);
+    }
     if (computePipeline != VK_NULL_HANDLE && pfnDestroyPipeline) {
       pfnDestroyPipeline(device, computePipeline, 0);
     }
