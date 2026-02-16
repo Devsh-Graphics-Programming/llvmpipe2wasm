@@ -45,6 +45,7 @@ set(LLVM_PREBUILT_URL "${_WEBVULKAN_DEFAULT_LLVM_PREBUILT_URL}" CACHE STRING "UR
 set(LLVM_PREBUILT_SHA256 "${_WEBVULKAN_DEFAULT_LLVM_PREBUILT_SHA256}" CACHE STRING "SHA256 for LLVM_PREBUILT_URL (optional)")
 set(LLVM_PROVIDER "prebuilt" CACHE STRING "LLVM provider: source, prebuilt, or system")
 set_property(CACHE LLVM_PROVIDER PROPERTY STRINGS source prebuilt system)
+option(WEBVULKAN_LLVM_ORCJIT "Build Mesa with LLVM ORCJIT path" OFF)
 set(LLVM_GIT_REF "afd4df07ab0262482829d4410a6bae9f2809d37b" CACHE STRING "Pinned LLVM git ref")
 if(LLVM_GIT_REF STREQUAL "ee9aeb4e05aa8edd2077b79f6712ea353ef5be77")
   set(LLVM_GIT_REF "afd4df07ab0262482829d4410a6bae9f2809d37b" CACHE STRING "Pinned LLVM git ref" FORCE)
@@ -124,6 +125,7 @@ add_custom_target(llvmpipe_wasm_spike
     -DLLVM_WASM_BUILD_DIR=${LLVM_WASM_BUILD_DIR}
     -DLLVM_WASM_INSTALL_DIR=${LLVM_WASM_INSTALL_DIR}
     -DLLVM_PROVIDER=${LLVM_PROVIDER}
+    -DWEBVULKAN_LLVM_ORCJIT=${WEBVULKAN_LLVM_ORCJIT}
     -DLLVM_GIT_REF=${LLVM_GIT_REF}
     -DLLVM_PREBUILT_URL=${LLVM_PREBUILT_URL}
     -DLLVM_PREBUILT_SHA256=${LLVM_PREBUILT_SHA256}
@@ -138,8 +140,11 @@ add_custom_target(lavapipe_wasm_spike DEPENDS llvmpipe_wasm_spike)
 add_library(webvulkan_llvmpipe_wasm INTERFACE)
 add_library(webvulkan::llvmpipe_wasm ALIAS webvulkan_llvmpipe_wasm)
 add_library(webvulkan::lavapipe_wasm ALIAS webvulkan_llvmpipe_wasm)
+add_library(webvulkan_llvm_jit INTERFACE)
+add_library(webvulkan::llvm_jit ALIAS webvulkan_llvm_jit)
 
 add_dependencies(webvulkan_llvmpipe_wasm llvmpipe_wasm_spike)
+add_dependencies(webvulkan_llvm_jit llvmpipe_wasm_spike)
 
 target_include_directories(webvulkan_llvmpipe_wasm INTERFACE
   "$<BUILD_INTERFACE:${MESA_SRC_DIR}/include>"
@@ -153,6 +158,8 @@ target_include_directories(webvulkan_llvmpipe_wasm INTERFACE
 target_link_libraries(webvulkan_llvmpipe_wasm INTERFACE
   "$<BUILD_INTERFACE:${WEBVULKAN_DRIVER_ARCHIVE}>"
 )
+target_link_libraries(webvulkan_llvm_jit INTERFACE webvulkan::llvmpipe_wasm)
+target_compile_definitions(webvulkan_llvm_jit INTERFACE WEBVULKAN_ENABLE_LLVM_JIT=1)
 
 set(WEBVULKAN_PACKAGE_NAME "WebVulkanLlvmpipeWasm")
 set(WEBVULKAN_CONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/${WEBVULKAN_PACKAGE_NAME}")

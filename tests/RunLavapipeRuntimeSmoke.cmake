@@ -71,6 +71,12 @@ append_rsp("-sEXPORT_ES6=1")
 append_rsp("-sENVIRONMENT=web,worker,node")
 append_rsp("-sEXPORTED_FUNCTIONS=['_main','_lavapipe_runtime_smoke']")
 append_rsp("-sEXPORTED_RUNTIME_METHODS=['ccall']")
+append_rsp("-sMAIN_MODULE=2")
+append_rsp("-sALLOW_TABLE_GROWTH=1")
+append_rsp("-Wl,--allow-multiple-definition")
+append_rsp("-sASSERTIONS=2")
+append_rsp("-sSTACK_OVERFLOW_CHECK=2")
+append_rsp("--profiling-funcs")
 append_rsp("${DRIVER_ARCHIVE}")
 
 execute_process(
