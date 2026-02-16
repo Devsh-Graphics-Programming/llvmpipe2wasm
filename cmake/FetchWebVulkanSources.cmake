@@ -65,6 +65,17 @@ function(webvulkan_fetch_git_source NAME)
   _webvulkan_state_file_for_source("${NAME}" _state_file)
   _webvulkan_source_state_key("${FETCH_REPOSITORY}" "${FETCH_TAG}" _state_key)
 
+  set(_editable_mode OFF)
+  if(DEFINED WEBVULKAN_DEPS_EDITABLE AND WEBVULKAN_DEPS_EDITABLE)
+    set(_editable_mode ON)
+  endif()
+
+  if(EXISTS "${FETCH_SOURCE_DIR}/.git" AND _editable_mode)
+    file(WRITE "${_state_file}" "${_state_key}\n")
+    message(STATUS "Using editable source for ${NAME} from ${FETCH_SOURCE_DIR}")
+    return()
+  endif()
+
   set(_should_fetch ON)
   if(EXISTS "${FETCH_SOURCE_DIR}/.git")
     set(_should_fetch OFF)

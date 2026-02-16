@@ -5,8 +5,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 set(WEBVULKAN_TEST_THIRDPARTY_DIR "${CMAKE_CURRENT_LIST_DIR}/../.3rdparty/tests" CACHE PATH "Test-only third-party root directory")
+set(WEBVULKAN_THIRDPARTY_STATE_DIR "${CMAKE_CURRENT_LIST_DIR}/../.3rdparty/.state" CACHE PATH "State directory for fetched third-party metadata")
 set(WEBVULKAN_VOLK_GIT_URL "https://github.com/zeux/volk.git" CACHE STRING "volk git repository URL for smoke tests")
 set(WEBVULKAN_VOLK_GIT_REF "1.4.304" CACHE STRING "Pinned volk git ref for smoke tests")
+set(WEBVULKAN_TEST_VOLK_SOURCE_DIR "${WEBVULKAN_TEST_THIRDPARTY_DIR}/volk" CACHE PATH "Path where volk is cloned for smoke tests")
 
 set(WEBVULKAN_TEST_MODE "auto" CACHE STRING "Test mode: auto, in-tree, or package")
 set_property(CACHE WEBVULKAN_TEST_MODE PROPERTY STRINGS auto in-tree package)
@@ -26,7 +28,13 @@ if(NOT COMMAND CPMAddPackage)
   if(NOT DEFINED WEBVULKAN_ALLOW_DEP_UPDATES)
     set(WEBVULKAN_ALLOW_DEP_UPDATES OFF CACHE BOOL "Allow dependency git update during configure")
   endif()
-  if(WEBVULKAN_ALLOW_DEP_UPDATES)
+  set(_webvulkan_allow_dep_updates "${WEBVULKAN_ALLOW_DEP_UPDATES}")
+  if(NOT DEFINED WEBVULKAN_DEPS_EDITABLE)
+    set(WEBVULKAN_DEPS_EDITABLE OFF CACHE BOOL "Use editable local dependency checkouts without automatic git reset/update")
+  endif()
+  if(WEBVULKAN_DEPS_EDITABLE)
+    set(CPM_UPDATE_DISCONNECTED ON CACHE BOOL "CPM update disconnected mode" FORCE)
+  elseif(_webvulkan_allow_dep_updates)
     set(CPM_UPDATE_DISCONNECTED OFF CACHE BOOL "CPM update disconnected mode" FORCE)
   else()
     set(CPM_UPDATE_DISCONNECTED ON CACHE BOOL "CPM update disconnected mode" FORCE)
@@ -95,13 +103,31 @@ if(NOT SUBBUILD_GENERATOR)
   message(FATAL_ERROR "No CMake generator is available for wasm smoke sub-build")
 endif()
 
-CPMAddPackage(
-  NAME webvulkan_volk
-  GIT_REPOSITORY "${WEBVULKAN_VOLK_GIT_URL}"
-  GIT_TAG "${WEBVULKAN_VOLK_GIT_REF}"
-  GIT_SHALLOW TRUE
-  DOWNLOAD_ONLY YES
-)
+if(NOT COMMAND webvulkan_fetch_git_source)
+  set(_webvulkan_root_fetch_sources "${CMAKE_CURRENT_LIST_DIR}/../cmake/FetchWebVulkanSources.cmake")
+  if(EXISTS "${_webvulkan_root_fetch_sources}")
+    include("${_webvulkan_root_fetch_sources}")
+  endif()
+endif()
+
+if(COMMAND webvulkan_fetch_git_source)
+  webvulkan_fetch_git_source(webvulkan_volk
+    REPOSITORY "${WEBVULKAN_VOLK_GIT_URL}"
+    TAG "${WEBVULKAN_VOLK_GIT_REF}"
+    SOURCE_DIR "${WEBVULKAN_TEST_VOLK_SOURCE_DIR}"
+  )
+  set(webvulkan_volk_SOURCE_DIR "${WEBVULKAN_TEST_VOLK_SOURCE_DIR}")
+else()
+  CPMAddPackage(
+    NAME webvulkan_volk
+    GIT_REPOSITORY "${WEBVULKAN_VOLK_GIT_URL}"
+    GIT_TAG "${WEBVULKAN_VOLK_GIT_REF}"
+    GIT_SHALLOW TRUE
+    GIT_REMOTE_UPDATE_STRATEGY CHECKOUT
+    SOURCE_DIR "${WEBVULKAN_TEST_VOLK_SOURCE_DIR}"
+    DOWNLOAD_ONLY YES
+  )
+endif()
 set(_webvulkan_volk_include_dir "${webvulkan_volk_SOURCE_DIR}")
 set(_webvulkan_volk_source "${webvulkan_volk_SOURCE_DIR}/volk.c")
 set(_webvulkan_volk_header "${webvulkan_volk_SOURCE_DIR}/volk.h")
