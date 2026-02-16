@@ -20,6 +20,12 @@ if(NOT TARGET webvulkan::lavapipe_wasm)
   target_link_libraries(webvulkan::lavapipe_wasm INTERFACE webvulkan::llvmpipe_wasm)
 endif()
 
+if(NOT TARGET webvulkan::llvm_jit)
+  add_library(webvulkan::llvm_jit INTERFACE IMPORTED)
+  target_link_libraries(webvulkan::llvm_jit INTERFACE webvulkan::llvmpipe_wasm)
+  target_compile_definitions(webvulkan::llvm_jit INTERFACE WEBVULKAN_ENABLE_LLVM_JIT=1)
+endif()
+
 if(NOT TARGET webvulkan_llvmpipe_wasm)
   add_library(webvulkan_llvmpipe_wasm INTERFACE IMPORTED)
   target_link_libraries(webvulkan_llvmpipe_wasm INTERFACE webvulkan::llvmpipe_wasm)
