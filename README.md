@@ -1,5 +1,6 @@
 <div align="center">
-  <img alt="WebVulkan logo" width="200" height="200" src="webvulkan-glow.svg" />
+  <img alt="WebVulkan logo" width="200" height="200" src="webvulkan-glow.svg" /> <img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/f7826036-87fa-4e44-9bb3-16850d3178aa" />
+
 </div>
 
 <p align="center">
