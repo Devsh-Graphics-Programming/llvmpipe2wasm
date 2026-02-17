@@ -83,16 +83,8 @@ jobs:
           if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
             mkdir -p "${dxc_dir}"
             curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
-            python3 - "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}" <<'PY'
-import sys
-import zipfile
-
-zip_path = sys.argv[1]
-dst_dir = sys.argv[2]
-
-with zipfile.ZipFile(zip_path) as archive:
-    archive.extractall(dst_dir)
-PY
+            python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+              "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
           fi
           test -f "${dxc_js}"
           test -f "${dxc_wasm}"
@@ -203,16 +195,8 @@ PY
           if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
             mkdir -p "${dxc_dir}"
             curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
-            python3 - "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}" <<'PY'
-import sys
-import zipfile
-
-zip_path = sys.argv[1]
-dst_dir = sys.argv[2]
-
-with zipfile.ZipFile(zip_path) as archive:
-    archive.extractall(dst_dir)
-PY
+            python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+              "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
           fi
           test -f "${dxc_js}"
           test -f "${dxc_wasm}"
