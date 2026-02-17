@@ -9,22 +9,6 @@
 #include "webvulkan/webvulkan_shader_runtime_registry.h"
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
-VKAPI_ATTR VkResult VKAPI_CALL vk_common_CreateCommandPool(
-  VkDevice device,
-  const VkCommandPoolCreateInfo* pCreateInfo,
-  const VkAllocationCallbacks* pAllocator,
-  VkCommandPool* pCommandPool
-);
-VKAPI_ATTR void VKAPI_CALL vk_common_DestroyCommandPool(
-  VkDevice device,
-  VkCommandPool commandPool,
-  const VkAllocationCallbacks* pAllocator
-);
-VKAPI_ATTR VkResult VKAPI_CALL vk_common_AllocateCommandBuffers(
-  VkDevice device,
-  const VkCommandBufferAllocateInfo* pAllocateInfo,
-  VkCommandBuffer* pCommandBuffers
-);
 static double g_last_dispatch_wall_ms = -1.0;
 static const uint32_t kSmokeBufferWordCount = 65536u;
 
@@ -585,16 +569,6 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnWaitForFences, PFN_vkWaitForFences, "vkWaitForFences");
   WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnResetFences, PFN_vkResetFences, "vkResetFences");
 #undef WEBVULKAN_LOAD_DEVICE_IF_MISSING
-  if (!pfnCreateCommandPool && vk_common_CreateCommandPool) {
-    pfnCreateCommandPool = vk_common_CreateCommandPool;
-  }
-  if (!pfnDestroyCommandPool && vk_common_DestroyCommandPool) {
-    pfnDestroyCommandPool = vk_common_DestroyCommandPool;
-  }
-  if (!pfnAllocateCommandBuffers && vk_common_AllocateCommandBuffers) {
-    pfnAllocateCommandBuffers = vk_common_AllocateCommandBuffers;
-  }
-
   if (!pfnDestroyDevice || !pfnGetPhysicalDeviceMemoryProperties ||
       !pfnCreateShaderModule || !pfnDestroyShaderModule ||
       !pfnCreatePipelineLayout || !pfnDestroyPipelineLayout ||
