@@ -268,7 +268,8 @@ set(MESA_LAVAPIPE_THIN_ARCHIVE "${MESA_BUILD_DIR}/src/gallium/frontends/lavapipe
 set(MESA_LAVAPIPE_FULL_ARCHIVE "${MESA_BUILD_DIR}/src/gallium/frontends/lavapipe/liblavapipe_st.full.a")
 set(MESA_WEBVULKAN_DRIVER_ARCHIVE "${MESA_BUILD_DIR}/libwebvulkan_driver.full.a")
 set(MESA_BUILD_STATE_FILE "${MESA_BUILD_DIR}/.webvulkan_mesa_build_state.txt")
-set(MESA_BUILD_SIGNATURE_VERSION "4")
+set(MESA_BUILD_SIGNATURE_VERSION "5")
+set(MESA_DRAW_USE_LLVM "true")
 set(MESA_SOURCE_REV "${MESA_GIT_REF}")
 set(MESA_SOURCE_TREE_STATE "unknown")
 if(EXISTS "${MESA_SRC_DIR}/.git")
@@ -334,7 +335,7 @@ if(EXISTS "${MESA_SRC_DIR}/.git")
 endif()
 
 set(MESA_CONFIG_SIGNATURE_INPUT
-  "llvm_provider=${LLVM_PROVIDER}\nllvm_git_ref=${LLVM_GIT_REF}\nllvm_prebuilt_url=${LLVM_PREBUILT_URL}\nllvm_prebuilt_sha256=${LLVM_PREBUILT_SHA256}\nemsdk_root=${EMSDK_ROOT}\nllvm_orcjit=${WEBVULKAN_LLVM_ORCJIT_MESON}\n"
+  "llvm_provider=${LLVM_PROVIDER}\nllvm_git_ref=${LLVM_GIT_REF}\nllvm_prebuilt_url=${LLVM_PREBUILT_URL}\nllvm_prebuilt_sha256=${LLVM_PREBUILT_SHA256}\nemsdk_root=${EMSDK_ROOT}\nllvm_orcjit=${WEBVULKAN_LLVM_ORCJIT_MESON}\ndraw_use_llvm=${MESA_DRAW_USE_LLVM}\n"
 )
 string(SHA256 MESA_CONFIG_SIGNATURE_HASH "${MESA_CONFIG_SIGNATURE_INPUT}")
 
@@ -665,7 +666,7 @@ if(MESA_REQUIRES_CONFIGURE)
     -Dplatforms=[]
     -Dllvm=enabled
     -Dshared-llvm=disabled
-    -Ddraw-use-llvm=true
+    -Ddraw-use-llvm=${MESA_DRAW_USE_LLVM}
     -Dllvm-orcjit=${WEBVULKAN_LLVM_ORCJIT_MESON}
     -Dopengl=false
     -Dgles1=disabled

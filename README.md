@@ -19,6 +19,7 @@ Public link targets:
 
 - `webvulkan::llvmpipe_wasm`
 - `webvulkan::lavapipe_wasm`
+- `webvulkan::shader_tools`
 
 ## Scope
 
@@ -87,6 +88,30 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
+## Build-time shader toolchain helper
+
+This repository exposes a reusable CMake helper:
+- `webvulkan_compile_opencl_to_spirv(...)`
+
+It compiles OpenCL C source to SPIR-V through Wasmer package runtime (`clspv` entrypoint by default), and can be used directly in consumer builds.
+
+Example:
+
+```cmake
+add_subdirectory(path/to/llvmpipe2wasm)
+
+set(MY_SHADER_SPV "${CMAKE_BINARY_DIR}/shaders/write_const.spv")
+webvulkan_compile_opencl_to_spirv(
+  SOURCE "${CMAKE_SOURCE_DIR}/shaders/write_const.cl"
+  OUTPUT "${MY_SHADER_SPV}"
+)
+
+add_custom_target(my_shaders DEPENDS "${MY_SHADER_SPV}")
+add_executable(my_app src/main.c)
+add_dependencies(my_app my_shaders)
+target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
+```
+
 ## Use as relocatable package (`find_package`)
 
 Build and install:
@@ -106,6 +131,18 @@ add_executable(my_app src/main.c)
 target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
 ```
 
+The same shader helper is available in package mode:
+
+```cmake
+find_package(WebVulkanLlvmpipeWasm REQUIRED CONFIG)
+
+set(MY_SHADER_SPV "${CMAKE_BINARY_DIR}/shaders/write_const.spv")
+webvulkan_compile_opencl_to_spirv(
+  SOURCE "${CMAKE_SOURCE_DIR}/shaders/write_const.cl"
+  OUTPUT "${MY_SHADER_SPV}"
+)
+```
+
 ## Volk smoke path
 
 `runtime_smoke` includes a dedicated Volk-based runtime check.
@@ -120,9 +157,9 @@ This gives a realistic loader flow for consumers that use Volk, while keeping di
 `smoke_poc_nir_to_wasm` is kept as an experimental proof-of-concept path and is not the main production direction.
 
 Current shader-path split:
-- `lavapipe_runtime_smoke` validates Vulkan compute dispatch in the Mesa wasm driver.
-- `clang_wasm_runtime_smoke` validates the clang-in-wasm toolchain path and reports `spirv_probe` status.
-- Current `clang/clang` runtime package does not include `llvm-spirv`, so direct clang-in-wasm -> SPIR-V for Vulkan shaders is currently unavailable in this smoke.
+- `lavapipe_runtime_smoke` injects runtime-generated SPIR-V (from Wasmer `clspv` by default) into the smoke module and validates Vulkan compute dispatch in the Mesa wasm driver.
+- `clang_wasm_runtime_smoke` validates the clang-in-wasm toolchain path and runs an SPIR-V probe through a Wasmer runtime command (`clspv` package entrypoint by default).
+- If that command is unavailable, smoke falls back to a direct `--target=spirv32` probe and reports the provider and failure reason.
 - `smoke_poc_nir_to_wasm` is a separate experimental check and is not part of `runtime_smoke`.
 
 ## Release channels

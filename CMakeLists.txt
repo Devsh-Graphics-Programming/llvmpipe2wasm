@@ -12,6 +12,9 @@ option(WASM_AUTO_FETCH_TOOLS "Auto-download missing tools during configure" ON)
 option(WEBVULKAN_BUILD_TESTS "Build maintainer smoke tests" OFF)
 option(WEBVULKAN_ALLOW_DEP_UPDATES "Allow dependency git update during configure" OFF)
 option(WEBVULKAN_DEPS_EDITABLE "Use editable local dependency checkouts without automatic git reset/update" OFF)
+set(WEBVULKAN_CLANG_WASM_PACKAGE "clang/clang" CACHE STRING "Wasmer package used for OpenCL C to SPIR-V compilation")
+set(WEBVULKAN_SPIRV_WASM_PACKAGE "lights0123/llvm-spir" CACHE STRING "Wasmer package that provides SPIR-V compiler entrypoint")
+set(WEBVULKAN_SPIRV_WASM_ENTRYPOINT "clspv" CACHE STRING "Wasmer package command used for OpenCL C to SPIR-V")
 set(WASM_EMSDK_VERSION "latest" CACHE STRING "emsdk version or tag")
 set(WASM_EMSDK_GIT_URL "https://github.com/emscripten-core/emsdk.git" CACHE STRING "emsdk git repository URL")
 set(WASM_EMSDK_GIT_REF "14c18b569f55138fe4963924162244251f454fb0" CACHE STRING "Pinned emsdk git ref")
@@ -27,6 +30,9 @@ set(WEBVULKAN_EMSCRIPTEN_TOOLCHAIN_FILE "${PROJECT_SOURCE_DIR}/cmake/toolchains/
 set(MESA_SRC_DIR "${WEBVULKAN_THIRDPARTY_DIR}/mesa" CACHE PATH "Path where Mesa is cloned")
 set(MESA_GIT_URL "https://github.com/Devsh-Graphics-Programming/mesa.git" CACHE STRING "Mesa git repository URL")
 set(MESA_GIT_REF "caeeea677046411288c1a5155d81b27640aedd3a" CACHE STRING "Pinned Mesa git ref")
+if(MESA_GIT_REF STREQUAL "fc73e2257d9c2b51f64c78eaaafe878a73951eb8")
+  set(MESA_GIT_REF "caeeea677046411288c1a5155d81b27640aedd3a" CACHE STRING "Pinned Mesa git ref" FORCE)
+endif()
 set(MESA_WASM_BUILD_DIR "${WEBVULKAN_BUILD_DIR}/mesa-wasm" CACHE PATH "Mesa WASM build directory")
 set(LLVM_SRC_DIR "${WEBVULKAN_THIRDPARTY_DIR}/llvm-project" CACHE PATH "Path where llvm-project is cloned")
 set(LLVM_HOST_BUILD_DIR "${WEBVULKAN_BUILD_DIR}/llvm-host-tools" CACHE PATH "LLVM host tools build directory")
@@ -72,6 +78,8 @@ set(CPM_UPDATE_DISCONNECTED ${_WEBVULKAN_FETCH_UPDATES_DISCONNECTED} CACHE BOOL 
 include(cmake/BootstrapCpm.cmake)
 webvulkan_bootstrap_cpm()
 include(cmake/FetchWebVulkanSources.cmake)
+set(WEBVULKAN_SHADER_COMPILER_SCRIPT "${PROJECT_SOURCE_DIR}/tools/webvulkan_compile_spirv.mjs")
+include(cmake/WebVulkanShaderTools.cmake)
 
 include(cmake/BootstrapEmsdk.cmake)
 ensure_emsdk_ready(
@@ -146,6 +154,8 @@ add_library(webvulkan::llvmpipe_wasm ALIAS webvulkan_llvmpipe_wasm)
 add_library(webvulkan::lavapipe_wasm ALIAS webvulkan_llvmpipe_wasm)
 add_library(webvulkan_llvm_jit INTERFACE)
 add_library(webvulkan::llvm_jit ALIAS webvulkan_llvm_jit)
+add_library(webvulkan_shader_tools INTERFACE)
+add_library(webvulkan::shader_tools ALIAS webvulkan_shader_tools)
 
 add_dependencies(webvulkan_llvmpipe_wasm llvmpipe_wasm_spike)
 add_dependencies(webvulkan_llvm_jit llvmpipe_wasm_spike)
@@ -164,6 +174,7 @@ target_link_libraries(webvulkan_llvmpipe_wasm INTERFACE
 )
 target_link_libraries(webvulkan_llvm_jit INTERFACE webvulkan::llvmpipe_wasm)
 target_compile_definitions(webvulkan_llvm_jit INTERFACE WEBVULKAN_ENABLE_LLVM_JIT=1)
+set_property(TARGET webvulkan_shader_tools PROPERTY WEBVULKAN_SHADER_COMPILER_SCRIPT "${WEBVULKAN_SHADER_COMPILER_SCRIPT}")
 
 set(WEBVULKAN_PACKAGE_NAME "WebVulkanLlvmpipeWasm")
 set(WEBVULKAN_CONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/${WEBVULKAN_PACKAGE_NAME}")
@@ -174,7 +185,7 @@ configure_package_config_file(
   "${PROJECT_SOURCE_DIR}/cmake/${WEBVULKAN_PACKAGE_NAME}Config.cmake.in"
   "${WEBVULKAN_CONFIG_FILE}"
   INSTALL_DESTINATION "${WEBVULKAN_CONFIG_DIR}"
-  PATH_VARS CMAKE_INSTALL_LIBDIR CMAKE_INSTALL_INCLUDEDIR
+  PATH_VARS CMAKE_INSTALL_LIBDIR CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_DATADIR
   NO_SET_AND_CHECK_MACRO
   NO_CHECK_REQUIRED_COMPONENTS_MACRO
 )
@@ -196,6 +207,8 @@ install(DIRECTORY "${MESA_SRC_DIR}/include/" DESTINATION "${CMAKE_INSTALL_INCLUD
 install(DIRECTORY "${MESA_SRC_DIR}/src/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/mesa/src")
 install(DIRECTORY "${LLVM_WASM_INSTALL_DIR}/include/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/llvm")
 install(FILES "${WEBVULKAN_CONFIG_FILE}" "${WEBVULKAN_VERSION_FILE}" DESTINATION "${WEBVULKAN_CONFIG_DIR}")
+install(FILES "${PROJECT_SOURCE_DIR}/cmake/WebVulkanShaderTools.cmake" DESTINATION "${WEBVULKAN_CONFIG_DIR}")
+install(FILES "${PROJECT_SOURCE_DIR}/tools/webvulkan_compile_spirv.mjs" DESTINATION "${CMAKE_INSTALL_DATADIR}/webvulkan/tools")
 
 if(WEBVULKAN_BUILD_TESTS)
   add_subdirectory(tests)

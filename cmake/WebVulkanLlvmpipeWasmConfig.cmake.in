@@ -4,6 +4,9 @@ set(_webvulkan_lib_driver "@PACKAGE_CMAKE_INSTALL_LIBDIR@/libwebvulkan_driver.a"
 set(_webvulkan_inc_mesa "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@/mesa")
 set(_webvulkan_inc_mesa_src "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@/mesa/src")
 set(_webvulkan_inc_llvm "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@/llvm")
+set(_webvulkan_tools_dir "${PACKAGE_PREFIX_DIR}/@PACKAGE_CMAKE_INSTALL_DATADIR@/webvulkan/tools")
+set(WEBVULKAN_SHADER_COMPILER_SCRIPT "${_webvulkan_tools_dir}/webvulkan_compile_spirv.mjs")
+include("${CMAKE_CURRENT_LIST_DIR}/WebVulkanShaderTools.cmake")
 
 if(NOT TARGET webvulkan::llvmpipe_wasm)
   add_library(webvulkan::llvmpipe_wasm INTERFACE IMPORTED)
@@ -24,6 +27,11 @@ if(NOT TARGET webvulkan::llvm_jit)
   add_library(webvulkan::llvm_jit INTERFACE IMPORTED)
   target_link_libraries(webvulkan::llvm_jit INTERFACE webvulkan::llvmpipe_wasm)
   target_compile_definitions(webvulkan::llvm_jit INTERFACE WEBVULKAN_ENABLE_LLVM_JIT=1)
+endif()
+
+if(NOT TARGET webvulkan::shader_tools)
+  add_library(webvulkan::shader_tools INTERFACE IMPORTED)
+  set_property(TARGET webvulkan::shader_tools PROPERTY WEBVULKAN_SHADER_COMPILER_SCRIPT "${WEBVULKAN_SHADER_COMPILER_SCRIPT}")
 endif()
 
 if(NOT TARGET webvulkan_llvmpipe_wasm)
