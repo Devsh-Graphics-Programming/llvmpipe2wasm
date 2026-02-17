@@ -187,19 +187,18 @@ static uint32_t find_memory_type_index(
   return fallbackIndex;
 }
 
-static PFN_vkVoidFunction webvulkan_load_proc(VkInstance instance, VkDevice device, const char* name) {
+static PFN_vkVoidFunction webvulkan_load_device_proc(
+  PFN_vkGetDeviceProcAddr primaryGetDeviceProcAddr,
+  PFN_vkGetDeviceProcAddr secondaryGetDeviceProcAddr,
+  VkDevice device,
+  const char* name
+) {
   PFN_vkVoidFunction proc = 0;
-  if (device != VK_NULL_HANDLE && vkGetDeviceProcAddr) {
-    proc = vkGetDeviceProcAddr(device, name);
+  if (device != VK_NULL_HANDLE && primaryGetDeviceProcAddr) {
+    proc = primaryGetDeviceProcAddr(device, name);
   }
-  if (!proc && instance != VK_NULL_HANDLE && vkGetInstanceProcAddr) {
-    proc = vkGetInstanceProcAddr(instance, name);
-  }
-  if (!proc) {
-    proc = vk_icdGetInstanceProcAddr(instance, name);
-  }
-  if (!proc) {
-    proc = vk_icdGetInstanceProcAddr(VK_NULL_HANDLE, name);
+  if (!proc && device != VK_NULL_HANDLE && secondaryGetDeviceProcAddr) {
+    proc = secondaryGetDeviceProcAddr(device, name);
   }
   return proc;
 }
@@ -292,6 +291,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   PFN_vkQueueSubmit pfnQueueSubmit = 0;
   PFN_vkWaitForFences pfnWaitForFences = 0;
   PFN_vkResetFences pfnResetFences = 0;
+  PFN_vkGetDeviceProcAddr icdGetDeviceProcAddr = 0;
 
 
   volkInitializeCustom((PFN_vkGetInstanceProcAddr)vk_icdGetInstanceProcAddr);
@@ -414,6 +414,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   }
 
   volkLoadDevice(device);
+  icdGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)vk_icdGetInstanceProcAddr(instance, "vkGetDeviceProcAddr");
   pfnGetPhysicalDeviceMemoryProperties =
     vkGetPhysicalDeviceMemoryProperties ? vkGetPhysicalDeviceMemoryProperties :
     (PFN_vkGetPhysicalDeviceMemoryProperties)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceMemoryProperties");
@@ -486,73 +487,88 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
                                      (PFN_vkWaitForFences)vkGetDeviceProcAddr(device, "vkWaitForFences");
   pfnResetFences = vkResetFences ? vkResetFences :
                                    (PFN_vkResetFences)vkGetDeviceProcAddr(device, "vkResetFences");
-#define WEBVULKAN_LOAD_IF_MISSING(FIELD, TYPE, NAME) \
+#define WEBVULKAN_LOAD_DEVICE_IF_MISSING(FIELD, TYPE, NAME) \
   do { \
     if (!(FIELD)) { \
-      (FIELD) = (TYPE)webvulkan_load_proc(instance, device, (NAME)); \
+      (FIELD) = (TYPE)webvulkan_load_device_proc(icdGetDeviceProcAddr, vkGetDeviceProcAddr, device, (NAME)); \
     } \
   } while (0)
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyDevice, PFN_vkDestroyDevice, "vkDestroyDevice");
-  WEBVULKAN_LOAD_IF_MISSING(
-    pfnGetPhysicalDeviceMemoryProperties,
-    PFN_vkGetPhysicalDeviceMemoryProperties,
-    "vkGetPhysicalDeviceMemoryProperties"
-  );
-  WEBVULKAN_LOAD_IF_MISSING(pfnCreateShaderModule, PFN_vkCreateShaderModule, "vkCreateShaderModule");
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyShaderModule, PFN_vkDestroyShaderModule, "vkDestroyShaderModule");
-  WEBVULKAN_LOAD_IF_MISSING(
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnDestroyDevice, PFN_vkDestroyDevice, "vkDestroyDevice");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCreateShaderModule, PFN_vkCreateShaderModule, "vkCreateShaderModule");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnDestroyShaderModule, PFN_vkDestroyShaderModule, "vkDestroyShaderModule");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
     pfnCreateDescriptorSetLayout,
     PFN_vkCreateDescriptorSetLayout,
     "vkCreateDescriptorSetLayout"
   );
-  WEBVULKAN_LOAD_IF_MISSING(
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
     pfnDestroyDescriptorSetLayout,
     PFN_vkDestroyDescriptorSetLayout,
     "vkDestroyDescriptorSetLayout"
   );
-  WEBVULKAN_LOAD_IF_MISSING(pfnCreateDescriptorPool, PFN_vkCreateDescriptorPool, "vkCreateDescriptorPool");
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyDescriptorPool, PFN_vkDestroyDescriptorPool, "vkDestroyDescriptorPool");
-  WEBVULKAN_LOAD_IF_MISSING(pfnAllocateDescriptorSets, PFN_vkAllocateDescriptorSets, "vkAllocateDescriptorSets");
-  WEBVULKAN_LOAD_IF_MISSING(pfnUpdateDescriptorSets, PFN_vkUpdateDescriptorSets, "vkUpdateDescriptorSets");
-  WEBVULKAN_LOAD_IF_MISSING(pfnCreatePipelineLayout, PFN_vkCreatePipelineLayout, "vkCreatePipelineLayout");
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyPipelineLayout, PFN_vkDestroyPipelineLayout, "vkDestroyPipelineLayout");
-  WEBVULKAN_LOAD_IF_MISSING(pfnCreateComputePipelines, PFN_vkCreateComputePipelines, "vkCreateComputePipelines");
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyPipeline, PFN_vkDestroyPipeline, "vkDestroyPipeline");
-  WEBVULKAN_LOAD_IF_MISSING(pfnCreateBuffer, PFN_vkCreateBuffer, "vkCreateBuffer");
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyBuffer, PFN_vkDestroyBuffer, "vkDestroyBuffer");
-  WEBVULKAN_LOAD_IF_MISSING(
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCreateDescriptorPool, PFN_vkCreateDescriptorPool, "vkCreateDescriptorPool");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
+    pfnDestroyDescriptorPool,
+    PFN_vkDestroyDescriptorPool,
+    "vkDestroyDescriptorPool"
+  );
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
+    pfnAllocateDescriptorSets,
+    PFN_vkAllocateDescriptorSets,
+    "vkAllocateDescriptorSets"
+  );
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnUpdateDescriptorSets, PFN_vkUpdateDescriptorSets, "vkUpdateDescriptorSets");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCreatePipelineLayout, PFN_vkCreatePipelineLayout, "vkCreatePipelineLayout");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
+    pfnDestroyPipelineLayout,
+    PFN_vkDestroyPipelineLayout,
+    "vkDestroyPipelineLayout"
+  );
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
+    pfnCreateComputePipelines,
+    PFN_vkCreateComputePipelines,
+    "vkCreateComputePipelines"
+  );
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnDestroyPipeline, PFN_vkDestroyPipeline, "vkDestroyPipeline");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCreateBuffer, PFN_vkCreateBuffer, "vkCreateBuffer");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnDestroyBuffer, PFN_vkDestroyBuffer, "vkDestroyBuffer");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
     pfnGetBufferMemoryRequirements,
     PFN_vkGetBufferMemoryRequirements,
     "vkGetBufferMemoryRequirements"
   );
-  WEBVULKAN_LOAD_IF_MISSING(pfnAllocateMemory, PFN_vkAllocateMemory, "vkAllocateMemory");
-  WEBVULKAN_LOAD_IF_MISSING(pfnFreeMemory, PFN_vkFreeMemory, "vkFreeMemory");
-  WEBVULKAN_LOAD_IF_MISSING(pfnBindBufferMemory, PFN_vkBindBufferMemory, "vkBindBufferMemory");
-  WEBVULKAN_LOAD_IF_MISSING(pfnMapMemory, PFN_vkMapMemory, "vkMapMemory");
-  WEBVULKAN_LOAD_IF_MISSING(pfnUnmapMemory, PFN_vkUnmapMemory, "vkUnmapMemory");
-  WEBVULKAN_LOAD_IF_MISSING(pfnGetDeviceQueue, PFN_vkGetDeviceQueue, "vkGetDeviceQueue");
-  WEBVULKAN_LOAD_IF_MISSING(pfnCreateCommandPool, PFN_vkCreateCommandPool, "vkCreateCommandPool");
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyCommandPool, PFN_vkDestroyCommandPool, "vkDestroyCommandPool");
-  WEBVULKAN_LOAD_IF_MISSING(
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnAllocateMemory, PFN_vkAllocateMemory, "vkAllocateMemory");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnFreeMemory, PFN_vkFreeMemory, "vkFreeMemory");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnBindBufferMemory, PFN_vkBindBufferMemory, "vkBindBufferMemory");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnMapMemory, PFN_vkMapMemory, "vkMapMemory");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnUnmapMemory, PFN_vkUnmapMemory, "vkUnmapMemory");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnGetDeviceQueue, PFN_vkGetDeviceQueue, "vkGetDeviceQueue");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCreateCommandPool, PFN_vkCreateCommandPool, "vkCreateCommandPool");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
+    pfnDestroyCommandPool,
+    PFN_vkDestroyCommandPool,
+    "vkDestroyCommandPool"
+  );
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
     pfnAllocateCommandBuffers,
     PFN_vkAllocateCommandBuffers,
     "vkAllocateCommandBuffers"
   );
-  WEBVULKAN_LOAD_IF_MISSING(pfnBeginCommandBuffer, PFN_vkBeginCommandBuffer, "vkBeginCommandBuffer");
-  WEBVULKAN_LOAD_IF_MISSING(pfnEndCommandBuffer, PFN_vkEndCommandBuffer, "vkEndCommandBuffer");
-  WEBVULKAN_LOAD_IF_MISSING(pfnCmdBindPipeline, PFN_vkCmdBindPipeline, "vkCmdBindPipeline");
-  WEBVULKAN_LOAD_IF_MISSING(
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnBeginCommandBuffer, PFN_vkBeginCommandBuffer, "vkBeginCommandBuffer");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnEndCommandBuffer, PFN_vkEndCommandBuffer, "vkEndCommandBuffer");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCmdBindPipeline, PFN_vkCmdBindPipeline, "vkCmdBindPipeline");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(
     pfnCmdBindDescriptorSets,
     PFN_vkCmdBindDescriptorSets,
     "vkCmdBindDescriptorSets"
   );
-  WEBVULKAN_LOAD_IF_MISSING(pfnCmdDispatch, PFN_vkCmdDispatch, "vkCmdDispatch");
-  WEBVULKAN_LOAD_IF_MISSING(pfnCreateFence, PFN_vkCreateFence, "vkCreateFence");
-  WEBVULKAN_LOAD_IF_MISSING(pfnDestroyFence, PFN_vkDestroyFence, "vkDestroyFence");
-  WEBVULKAN_LOAD_IF_MISSING(pfnQueueSubmit, PFN_vkQueueSubmit, "vkQueueSubmit");
-  WEBVULKAN_LOAD_IF_MISSING(pfnWaitForFences, PFN_vkWaitForFences, "vkWaitForFences");
-  WEBVULKAN_LOAD_IF_MISSING(pfnResetFences, PFN_vkResetFences, "vkResetFences");
-#undef WEBVULKAN_LOAD_IF_MISSING
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCmdDispatch, PFN_vkCmdDispatch, "vkCmdDispatch");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnCreateFence, PFN_vkCreateFence, "vkCreateFence");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnDestroyFence, PFN_vkDestroyFence, "vkDestroyFence");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnQueueSubmit, PFN_vkQueueSubmit, "vkQueueSubmit");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnWaitForFences, PFN_vkWaitForFences, "vkWaitForFences");
+  WEBVULKAN_LOAD_DEVICE_IF_MISSING(pfnResetFences, PFN_vkResetFences, "vkResetFences");
+#undef WEBVULKAN_LOAD_DEVICE_IF_MISSING
 
   if (!pfnDestroyDevice || !pfnGetPhysicalDeviceMemoryProperties ||
       !pfnCreateShaderModule || !pfnDestroyShaderModule ||
