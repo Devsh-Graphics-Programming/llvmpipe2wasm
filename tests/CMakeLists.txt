@@ -24,6 +24,8 @@ set(WEBVULKAN_DXC_WASM_JS "" CACHE FILEPATH "Path to dxc.js built for Wasm runti
 set(WEBVULKAN_CLANG_WASM_PACKAGE "clang/clang" CACHE STRING "Wasmer package used for clang-in-wasm smoke")
 set(WEBVULKAN_SPIRV_WASM_PACKAGE "lights0123/llvm-spir" CACHE STRING "Wasmer package used for SPIR-V probe in clang wasm smoke")
 set(WEBVULKAN_SPIRV_WASM_ENTRYPOINT "clspv" CACHE STRING "Wasmer command used for SPIR-V probe in clang wasm smoke")
+set(WEBVULKAN_RUNTIME_BENCH_ITERATIONS "5" CACHE STRING "Timed dispatch iterations per lavapipe runtime mode smoke")
+set(WEBVULKAN_RUNTIME_WARMUP_ITERATIONS "1" CACHE STRING "Warmup dispatch iterations per lavapipe runtime mode smoke")
 
 if(NOT COMMAND CPMAddPackage)
   if(NOT DEFINED WEBVULKAN_CPM_VERSION OR WEBVULKAN_CPM_VERSION STREQUAL "")
@@ -295,8 +297,6 @@ add_custom_command(
 )
 add_custom_target(wasm_runtime_smoke DEPENDS "${WEBVULKAN_WASM_SMOKE_OK}")
 
-set(WEBVULKAN_LAVAPIPE_SMOKE_OK "${CMAKE_BINARY_DIR}/lavapipe_runtime_smoke.ok")
-set(WEBVULKAN_LAVAPIPE_SMOKE_JS "${CMAKE_BINARY_DIR}/lavapipe-smoke/lavapipe_runtime_smoke.js")
 set(WEBVULKAN_RUNTIME_REGISTRY_SOURCE "${CMAKE_CURRENT_LIST_DIR}/wasm/src/webvulkan_shader_runtime_registry.c")
 set(_webvulkan_lavapipe_depends
   "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
@@ -317,33 +317,123 @@ set(_webvulkan_lavapipe_extra_sources
 )
 list(JOIN _webvulkan_lavapipe_extra_sources "|" _webvulkan_lavapipe_extra_sources_serialized)
 
-add_custom_command(
-  OUTPUT "${WEBVULKAN_LAVAPIPE_SMOKE_OK}"
-  COMMAND
-    "${CMAKE_COMMAND}"
-    -DEMSDK_ROOT=${EMSDK_ROOT}
-    -DDRIVER_ARCHIVE=${_webvulkan_driver_archive}
-    -DSMOKE_INCLUDE_DIRS_SERIALIZED=${_webvulkan_smoke_include_dirs_serialized}
-    -DSMOKE_EXTRA_SOURCES_SERIALIZED=${_webvulkan_lavapipe_extra_sources_serialized}
-    -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c
-    -DSMOKE_JS_OUT=${WEBVULKAN_LAVAPIPE_SMOKE_JS}
-    -DSMOKE_EXPORT=_lavapipe_runtime_smoke
-    -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
-    -DSMOKE_REQUIRE_RUNTIME_SPIRV=1
-    -DSMOKE_WASMER_BIN=${WEBVULKAN_WASMER_BIN}
-    -DSMOKE_DXC_WASM_JS=${WEBVULKAN_DXC_WASM_JS}
-    -DSMOKE_CLANG_WASM_PACKAGE=${WEBVULKAN_CLANG_WASM_PACKAGE}
-    -DSMOKE_SPIRV_WASM_PACKAGE=${WEBVULKAN_SPIRV_WASM_PACKAGE}
-    -DSMOKE_SPIRV_WASM_ENTRYPOINT=${WEBVULKAN_SPIRV_WASM_ENTRYPOINT}
-    -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
-    -DVOLK_SOURCE=${_webvulkan_volk_source}
-    -P "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
-  COMMAND "${CMAKE_COMMAND}" -E touch "${WEBVULKAN_LAVAPIPE_SMOKE_OK}"
-  DEPENDS ${_webvulkan_lavapipe_depends}
-  USES_TERMINAL
-  VERBATIM
+function(webvulkan_add_lavapipe_runtime_mode_smoke_target TARGET_NAME RUNTIME_MODE RUNTIME_PROFILE)
+  set(_webvulkan_runtime_shader_workload "write_const")
+  if(ARGC GREATER 3)
+    set(_webvulkan_runtime_shader_workload "${ARGV3}")
+  endif()
+  set(_webvulkan_lavapipe_smoke_ok "${CMAKE_BINARY_DIR}/${TARGET_NAME}.ok")
+  set(_webvulkan_lavapipe_smoke_js "${CMAKE_BINARY_DIR}/lavapipe-smoke/${TARGET_NAME}.js")
+  add_custom_command(
+    OUTPUT "${_webvulkan_lavapipe_smoke_ok}"
+    COMMAND
+      "${CMAKE_COMMAND}"
+      -DEMSDK_ROOT=${EMSDK_ROOT}
+      -DDRIVER_ARCHIVE=${_webvulkan_driver_archive}
+      -DSMOKE_INCLUDE_DIRS_SERIALIZED=${_webvulkan_smoke_include_dirs_serialized}
+      -DSMOKE_EXTRA_SOURCES_SERIALIZED=${_webvulkan_lavapipe_extra_sources_serialized}
+      -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c
+      -DSMOKE_JS_OUT=${_webvulkan_lavapipe_smoke_js}
+      -DSMOKE_EXPORT=_lavapipe_runtime_smoke
+      -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
+      -DSMOKE_REQUIRE_RUNTIME_SPIRV=1
+      -DSMOKE_RUNTIME_MODE=${RUNTIME_MODE}
+      -DSMOKE_RUNTIME_BENCH_PROFILE=${RUNTIME_PROFILE}
+      -DSMOKE_RUNTIME_BENCH_ITERATIONS=${WEBVULKAN_RUNTIME_BENCH_ITERATIONS}
+      -DSMOKE_RUNTIME_WARMUP_ITERATIONS=${WEBVULKAN_RUNTIME_WARMUP_ITERATIONS}
+      -DSMOKE_RUNTIME_SHADER_WORKLOAD=${_webvulkan_runtime_shader_workload}
+      -DSMOKE_WASMER_BIN=${WEBVULKAN_WASMER_BIN}
+      -DSMOKE_DXC_WASM_JS=${WEBVULKAN_DXC_WASM_JS}
+      -DSMOKE_CLANG_WASM_PACKAGE=${WEBVULKAN_CLANG_WASM_PACKAGE}
+      -DSMOKE_SPIRV_WASM_PACKAGE=${WEBVULKAN_SPIRV_WASM_PACKAGE}
+      -DSMOKE_SPIRV_WASM_ENTRYPOINT=${WEBVULKAN_SPIRV_WASM_ENTRYPOINT}
+      -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
+      -DVOLK_SOURCE=${_webvulkan_volk_source}
+      -P "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
+    COMMAND "${CMAKE_COMMAND}" -E touch "${_webvulkan_lavapipe_smoke_ok}"
+    DEPENDS ${_webvulkan_lavapipe_depends}
+    USES_TERMINAL
+    VERBATIM
+  )
+  add_custom_target(${TARGET_NAME} DEPENDS "${_webvulkan_lavapipe_smoke_ok}")
+endfunction()
+
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_micro fast_wasm micro)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_micro raw_llvm_ir micro)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_realistic fast_wasm realistic)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_realistic raw_llvm_ir realistic)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_hot_loop fast_wasm hot_loop_single_dispatch)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_hot_loop raw_llvm_ir hot_loop_single_dispatch)
+
+add_custom_target(lavapipe_runtime_smoke_fast_wasm)
+add_dependencies(lavapipe_runtime_smoke_fast_wasm
+  lavapipe_runtime_smoke_fast_wasm_micro
+  lavapipe_runtime_smoke_fast_wasm_realistic
 )
-add_custom_target(lavapipe_runtime_smoke DEPENDS "${WEBVULKAN_LAVAPIPE_SMOKE_OK}")
+
+add_custom_target(lavapipe_runtime_smoke_raw_llvm_ir)
+add_dependencies(lavapipe_runtime_smoke_raw_llvm_ir
+  lavapipe_runtime_smoke_raw_llvm_ir_micro
+  lavapipe_runtime_smoke_raw_llvm_ir_realistic
+)
+
+add_custom_target(lavapipe_runtime_smoke_hot_loop)
+add_dependencies(lavapipe_runtime_smoke_hot_loop
+  lavapipe_runtime_smoke_fast_wasm_hot_loop
+  lavapipe_runtime_smoke_raw_llvm_ir_hot_loop
+)
+
+webvulkan_add_lavapipe_runtime_mode_smoke_target(
+  lavapipe_runtime_smoke_fast_wasm_atomic_single_counter
+  fast_wasm
+  hot_loop_single_dispatch
+  atomic_single_counter
+)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(
+  lavapipe_runtime_smoke_raw_llvm_ir_atomic_single_counter
+  raw_llvm_ir
+  hot_loop_single_dispatch
+  atomic_single_counter
+)
+
+webvulkan_add_lavapipe_runtime_mode_smoke_target(
+  lavapipe_runtime_smoke_fast_wasm_atomic_per_workgroup
+  fast_wasm
+  hot_loop_single_dispatch
+  atomic_per_workgroup
+)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(
+  lavapipe_runtime_smoke_raw_llvm_ir_atomic_per_workgroup
+  raw_llvm_ir
+  hot_loop_single_dispatch
+  atomic_per_workgroup
+)
+
+webvulkan_add_lavapipe_runtime_mode_smoke_target(
+  lavapipe_runtime_smoke_fast_wasm_no_race_unique_writes
+  fast_wasm
+  hot_loop_single_dispatch
+  no_race_unique_writes
+)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(
+  lavapipe_runtime_smoke_raw_llvm_ir_no_race_unique_writes
+  raw_llvm_ir
+  hot_loop_single_dispatch
+  no_race_unique_writes
+)
+
+add_custom_target(lavapipe_runtime_smoke_shader_workloads)
+add_dependencies(lavapipe_runtime_smoke_shader_workloads
+  lavapipe_runtime_smoke_fast_wasm_atomic_single_counter
+  lavapipe_runtime_smoke_raw_llvm_ir_atomic_single_counter
+  lavapipe_runtime_smoke_fast_wasm_atomic_per_workgroup
+  lavapipe_runtime_smoke_raw_llvm_ir_atomic_per_workgroup
+  lavapipe_runtime_smoke_fast_wasm_no_race_unique_writes
+  lavapipe_runtime_smoke_raw_llvm_ir_no_race_unique_writes
+)
+
+add_custom_target(lavapipe_runtime_smoke)
+add_dependencies(lavapipe_runtime_smoke lavapipe_runtime_smoke_fast_wasm lavapipe_runtime_smoke_raw_llvm_ir)
 
 set(WEBVULKAN_CLANG_WASM_SMOKE_OK "${CMAKE_BINARY_DIR}/clang_wasm_runtime_smoke.ok")
 add_custom_command(

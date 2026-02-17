@@ -16,8 +16,38 @@ require_var(VOLK_SOURCE)
 if(NOT DEFINED SMOKE_REQUIRE_RUNTIME_SPIRV OR "${SMOKE_REQUIRE_RUNTIME_SPIRV}" STREQUAL "")
   set(SMOKE_REQUIRE_RUNTIME_SPIRV "0")
 endif()
+if(NOT DEFINED SMOKE_RUNTIME_MODE OR "${SMOKE_RUNTIME_MODE}" STREQUAL "")
+  set(SMOKE_RUNTIME_MODE "fast_wasm")
+endif()
+if(NOT SMOKE_RUNTIME_MODE STREQUAL "fast_wasm" AND NOT SMOKE_RUNTIME_MODE STREQUAL "raw_llvm_ir")
+  message(FATAL_ERROR "SMOKE_RUNTIME_MODE must be fast_wasm or raw_llvm_ir")
+endif()
+if(NOT DEFINED SMOKE_RUNTIME_BENCH_ITERATIONS OR "${SMOKE_RUNTIME_BENCH_ITERATIONS}" STREQUAL "")
+  set(SMOKE_RUNTIME_BENCH_ITERATIONS "5")
+endif()
+if(NOT DEFINED SMOKE_RUNTIME_WARMUP_ITERATIONS OR "${SMOKE_RUNTIME_WARMUP_ITERATIONS}" STREQUAL "")
+  set(SMOKE_RUNTIME_WARMUP_ITERATIONS "1")
+endif()
+if(NOT DEFINED SMOKE_RUNTIME_BENCH_PROFILE OR "${SMOKE_RUNTIME_BENCH_PROFILE}" STREQUAL "")
+  set(SMOKE_RUNTIME_BENCH_PROFILE "micro")
+endif()
+if(NOT SMOKE_RUNTIME_BENCH_PROFILE STREQUAL "micro"
+   AND NOT SMOKE_RUNTIME_BENCH_PROFILE STREQUAL "realistic"
+   AND NOT SMOKE_RUNTIME_BENCH_PROFILE STREQUAL "hot_loop_single_dispatch")
+  message(FATAL_ERROR "SMOKE_RUNTIME_BENCH_PROFILE must be micro, realistic, or hot_loop_single_dispatch")
+endif()
 if(NOT DEFINED SMOKE_CLANG_WASM_PACKAGE OR "${SMOKE_CLANG_WASM_PACKAGE}" STREQUAL "")
   set(SMOKE_CLANG_WASM_PACKAGE "clang/clang")
+endif()
+if(NOT DEFINED SMOKE_RUNTIME_SHADER_WORKLOAD OR "${SMOKE_RUNTIME_SHADER_WORKLOAD}" STREQUAL "")
+  set(SMOKE_RUNTIME_SHADER_WORKLOAD "write_const")
+endif()
+if(NOT SMOKE_RUNTIME_SHADER_WORKLOAD STREQUAL "write_const"
+   AND NOT SMOKE_RUNTIME_SHADER_WORKLOAD STREQUAL "atomic_single_counter"
+   AND NOT SMOKE_RUNTIME_SHADER_WORKLOAD STREQUAL "atomic_per_workgroup"
+   AND NOT SMOKE_RUNTIME_SHADER_WORKLOAD STREQUAL "no_race_unique_writes")
+  message(FATAL_ERROR
+    "SMOKE_RUNTIME_SHADER_WORKLOAD must be write_const, atomic_single_counter, atomic_per_workgroup, or no_race_unique_writes")
 endif()
 if(NOT DEFINED SMOKE_SPIRV_WASM_PACKAGE OR "${SMOKE_SPIRV_WASM_PACKAGE}" STREQUAL "")
   set(SMOKE_SPIRV_WASM_PACKAGE "lights0123/llvm-spir")
@@ -109,7 +139,7 @@ append_rsp("-sMODULARIZE=1")
 append_rsp("-sEXPORT_ES6=1")
 append_rsp("-sENVIRONMENT=web,worker,node")
 if(SMOKE_REQUIRE_RUNTIME_SPIRV STREQUAL "1")
-  append_rsp("-sEXPORTED_FUNCTIONS=['_main','${SMOKE_EXPORT}','_webvulkan_reset_runtime_shader_registry','_webvulkan_set_runtime_active_shader_key','_webvulkan_set_runtime_expected_dispatch_value','_webvulkan_runtime_reset_captured_shader_key','_webvulkan_runtime_has_captured_shader_key','_webvulkan_runtime_get_captured_shader_key_lo','_webvulkan_runtime_get_captured_shader_key_hi','_webvulkan_set_runtime_shader_spirv','_webvulkan_register_runtime_shader_spirv','_webvulkan_register_runtime_wasm_module','_webvulkan_register_runtime_shader_bundle','_webvulkan_get_runtime_wasm_used','_webvulkan_get_runtime_wasm_provider','_malloc','_free']")
+  append_rsp("-sEXPORTED_FUNCTIONS=['_main','${SMOKE_EXPORT}','_webvulkan_reset_runtime_shader_registry','_webvulkan_set_runtime_active_shader_key','_webvulkan_set_runtime_dispatch_mode','_webvulkan_get_runtime_dispatch_mode','_webvulkan_set_runtime_expected_dispatch_value','_webvulkan_runtime_reset_captured_shader_key','_webvulkan_runtime_has_captured_shader_key','_webvulkan_runtime_get_captured_shader_key_lo','_webvulkan_runtime_get_captured_shader_key_hi','_webvulkan_set_runtime_shader_spirv','_webvulkan_register_runtime_shader_spirv','_webvulkan_register_runtime_wasm_module','_webvulkan_register_runtime_shader_bundle','_webvulkan_get_runtime_wasm_used','_webvulkan_get_runtime_wasm_provider','_webvulkan_set_runtime_bench_profile','_webvulkan_get_runtime_bench_profile','_webvulkan_set_runtime_shader_workload','_webvulkan_get_runtime_shader_workload','_webvulkan_get_last_dispatch_ms','_malloc','_free']")
 else()
   append_rsp("-sEXPORTED_FUNCTIONS=['_main','${SMOKE_EXPORT}']")
 endif()
@@ -135,6 +165,11 @@ execute_process(
     "SMOKE_MODULE=${SMOKE_JS_OUT}"
     "SMOKE_EXPORT=${SMOKE_EXPORT}"
     "SMOKE_REQUIRE_RUNTIME_SPIRV=${SMOKE_REQUIRE_RUNTIME_SPIRV}"
+    "WEBVULKAN_RUNTIME_EXECUTION_MODE=${SMOKE_RUNTIME_MODE}"
+    "WEBVULKAN_RUNTIME_BENCH_ITERATIONS=${SMOKE_RUNTIME_BENCH_ITERATIONS}"
+    "WEBVULKAN_RUNTIME_WARMUP_ITERATIONS=${SMOKE_RUNTIME_WARMUP_ITERATIONS}"
+    "WEBVULKAN_RUNTIME_BENCH_PROFILE=${SMOKE_RUNTIME_BENCH_PROFILE}"
+    "WEBVULKAN_RUNTIME_SHADER_WORKLOAD=${SMOKE_RUNTIME_SHADER_WORKLOAD}"
     "WEBVULKAN_CLANG_WASM_PACKAGE=${SMOKE_CLANG_WASM_PACKAGE}"
     "WEBVULKAN_SPIRV_WASM_PACKAGE=${SMOKE_SPIRV_WASM_PACKAGE}"
     "WEBVULKAN_SPIRV_WASM_ENTRYPOINT=${SMOKE_SPIRV_WASM_ENTRYPOINT}"

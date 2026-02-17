@@ -9,6 +9,95 @@
 #include "webvulkan_shader_runtime_registry.h"
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
+static double g_last_dispatch_wall_ms = -1.0;
+static const uint32_t kSmokeBufferWordCount = 65536u;
+
+enum {
+  WEBVULKAN_RUNTIME_BENCH_PROFILE_MICRO = 0u,
+  WEBVULKAN_RUNTIME_BENCH_PROFILE_REALISTIC = 1u,
+  WEBVULKAN_RUNTIME_BENCH_PROFILE_HOT_LOOP_SINGLE_DISPATCH = 2u,
+  WEBVULKAN_RUNTIME_BENCH_PROFILE_COUNT = 3u
+};
+
+enum {
+  WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST = 0u,
+  WEBVULKAN_RUNTIME_SHADER_WORKLOAD_ATOMIC_SINGLE_COUNTER = 1u,
+  WEBVULKAN_RUNTIME_SHADER_WORKLOAD_ATOMIC_PER_WORKGROUP = 2u,
+  WEBVULKAN_RUNTIME_SHADER_WORKLOAD_NO_RACE_UNIQUE_WRITES = 3u,
+  WEBVULKAN_RUNTIME_SHADER_WORKLOAD_COUNT = 4u
+};
+
+typedef struct WebVulkanRuntimeBenchProfile_t {
+  const char* name;
+  uint32_t dispatchesPerSubmit;
+  uint32_t submitIterations;
+  uint32_t dispatchX;
+  uint32_t dispatchY;
+  uint32_t dispatchZ;
+} WebVulkanRuntimeBenchProfile;
+
+static uint32_t g_runtime_bench_profile = WEBVULKAN_RUNTIME_BENCH_PROFILE_MICRO;
+static const WebVulkanRuntimeBenchProfile g_runtime_bench_profiles[WEBVULKAN_RUNTIME_BENCH_PROFILE_COUNT] = {
+  { "micro", 1024u, 16u, 1u, 1u, 1u },
+  { "realistic", 64u, 8u, 4u, 1u, 1u },
+  { "hot_loop_single_dispatch", 1u, 512u, 256u, 1u, 1u }
+};
+static uint32_t g_runtime_shader_workload = WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST;
+
+static const WebVulkanRuntimeBenchProfile* webvulkan_get_runtime_bench_profile_desc(void) {
+  uint32_t profile = g_runtime_bench_profile;
+  if (profile >= WEBVULKAN_RUNTIME_BENCH_PROFILE_COUNT) {
+    profile = WEBVULKAN_RUNTIME_BENCH_PROFILE_MICRO;
+    g_runtime_bench_profile = profile;
+  }
+  return &g_runtime_bench_profiles[profile];
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_bench_profile(uint32_t profile) {
+  if (profile >= WEBVULKAN_RUNTIME_BENCH_PROFILE_COUNT) {
+    return -1;
+  }
+  g_runtime_bench_profile = profile;
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_get_runtime_bench_profile(void) {
+  return g_runtime_bench_profile;
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_shader_workload(uint32_t workload) {
+  if (workload >= WEBVULKAN_RUNTIME_SHADER_WORKLOAD_COUNT) {
+    return -1;
+  }
+  g_runtime_shader_workload = workload;
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_get_runtime_shader_workload(void) {
+  return g_runtime_shader_workload;
+}
+
+static const char* webvulkan_get_runtime_shader_workload_name(uint32_t workload) {
+  switch (workload) {
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST:
+    return "write_const";
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_ATOMIC_SINGLE_COUNTER:
+    return "atomic_single_counter";
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_ATOMIC_PER_WORKGROUP:
+    return "atomic_per_workgroup";
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_NO_RACE_UNIQUE_WRITES:
+    return "no_race_unique_writes";
+  default:
+    return "unknown";
+  }
+}
+
+static uint32_t webvulkan_get_runtime_shader_workgroup_size_x(uint32_t workload) {
+  if (workload == WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST) {
+    return 1u;
+  }
+  return 64u;
+}
 
 static const uint32_t kSmokeComputeSpirv[] = {
   0x07230203u, 0x00010000u, 0x0008000bu, 0x00000012u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
@@ -98,9 +187,15 @@ static uint32_t find_memory_type_index(
   return fallbackIndex;
 }
 
+EMSCRIPTEN_KEEPALIVE double webvulkan_get_last_dispatch_ms(void) {
+  return g_last_dispatch_wall_ms;
+}
+
 EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("lavapipe runtime smoke stage=begin\n");
   fflush(stdout);
+  g_last_dispatch_wall_ms = -1.0;
+  const WebVulkanRuntimeBenchProfile* benchProfile = webvulkan_get_runtime_bench_profile_desc();
   int smokeRc = 0;
   VkResult rc = VK_SUCCESS;
   VkInstance instance = VK_NULL_HANDLE;
@@ -113,13 +208,31 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   VkPipeline computePipeline = VK_NULL_HANDLE;
   VkBuffer storageBuffer = VK_NULL_HANDLE;
   VkDeviceMemory storageMemory = VK_NULL_HANDLE;
-  uint32_t* mappedStorageWord = 0;
+  uint32_t* mappedStorageWords = 0;
   VkCommandPool commandPool = VK_NULL_HANDLE;
   VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
   VkFence submitFence = VK_NULL_HANDLE;
   VkQueue queue = VK_NULL_HANDLE;
+  double dispatchStartMs = 0.0;
+  double dispatchEndMs = 0.0;
   uint32_t dispatchObservedValue = 0u;
+  uint32_t dispatchObservedAuxValue = 0u;
+  const uint32_t dispatchesPerSubmit = benchProfile->dispatchesPerSubmit;
+  const uint32_t dispatchSubmitIterations = benchProfile->submitIterations;
+  const uint32_t dispatchX = benchProfile->dispatchX;
+  const uint32_t dispatchY = benchProfile->dispatchY;
+  const uint32_t dispatchZ = benchProfile->dispatchZ;
+  const uint32_t shaderWorkload = g_runtime_shader_workload;
+  const char* shaderWorkloadName = webvulkan_get_runtime_shader_workload_name(shaderWorkload);
+  const uint32_t shaderWorkgroupSizeX = webvulkan_get_runtime_shader_workgroup_size_x(shaderWorkload);
+  const uint32_t dispatchGroupsPerDispatch = dispatchX * dispatchY * dispatchZ;
+  const uint32_t dispatchInvocationsPerDispatch = dispatchGroupsPerDispatch * shaderWorkgroupSizeX;
+  const uint32_t dispatchInvocationsPerSubmit = dispatchInvocationsPerDispatch * dispatchesPerSubmit;
+  const uint32_t totalDispatches = dispatchSubmitIterations * dispatchesPerSubmit;
   uint32_t expectedDispatchValue = kEmbeddedExpectedDispatchValue;
+  uint32_t expectedDispatchAuxValue = 0u;
+  uint32_t clearWordCount = 1u;
+  uint32_t uniqueWriteWordCount = 0u;
   uint32_t shaderKeyLo = webvulkan_get_runtime_active_shader_key_lo();
   uint32_t shaderKeyHi = webvulkan_get_runtime_active_shader_key_hi();
   const uint32_t* shaderCodeWords = kSmokeComputeSpirv;
@@ -161,6 +274,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   PFN_vkDestroyFence pfnDestroyFence = 0;
   PFN_vkQueueSubmit pfnQueueSubmit = 0;
   PFN_vkWaitForFences pfnWaitForFences = 0;
+  PFN_vkResetFences pfnResetFences = 0;
 
 
   volkInitializeCustom((PFN_vkGetInstanceProcAddr)vk_icdGetInstanceProcAddr);
@@ -353,6 +467,8 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
                                 (PFN_vkQueueSubmit)vkGetDeviceProcAddr(device, "vkQueueSubmit");
   pfnWaitForFences = vkWaitForFences ? vkWaitForFences :
                                     (PFN_vkWaitForFences)vkGetDeviceProcAddr(device, "vkWaitForFences");
+  pfnResetFences = vkResetFences ? vkResetFences :
+                                  (PFN_vkResetFences)vkGetDeviceProcAddr(device, "vkResetFences");
 
   if (!pfnDestroyDevice || !pfnGetPhysicalDeviceMemoryProperties ||
       !pfnCreateShaderModule || !pfnDestroyShaderModule ||
@@ -392,7 +508,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   }
   if (!pfnGetDeviceQueue || !pfnCreateCommandPool || !pfnDestroyCommandPool || !pfnAllocateCommandBuffers ||
       !pfnBeginCommandBuffer || !pfnEndCommandBuffer || !pfnCmdBindPipeline || !pfnCmdBindDescriptorSets || !pfnCmdDispatch ||
-      !pfnCreateFence || !pfnDestroyFence || !pfnQueueSubmit || !pfnWaitForFences) {
+      !pfnCreateFence || !pfnDestroyFence || !pfnQueueSubmit || !pfnWaitForFences || !pfnResetFences) {
     printf("lavapipe runtime smoke missing dispatch entrypoints\n");
     printf("  vkGetDeviceQueue=%s\n", pfnGetDeviceQueue ? "present" : "missing");
     printf("  vkCreateCommandPool=%s\n", pfnCreateCommandPool ? "present" : "missing");
@@ -407,6 +523,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     printf("  vkDestroyFence=%s\n", pfnDestroyFence ? "present" : "missing");
     printf("  vkQueueSubmit=%s\n", pfnQueueSubmit ? "present" : "missing");
     printf("  vkWaitForFences=%s\n", pfnWaitForFences ? "present" : "missing");
+    printf("  vkResetFences=%s\n", pfnResetFences ? "present" : "missing");
     smokeRc = 36;
     goto cleanup;
   }
@@ -430,12 +547,14 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     if (runtimeSpirvEntrypoint && runtimeSpirvEntrypoint[0]) {
       shaderEntryPoint = runtimeSpirvEntrypoint;
     }
-    if (!webvulkan_runtime_lookup_expected_dispatch_value(
-          shaderKeyLo,
-          shaderKeyHi,
-          &expectedDispatchValue
-        )) {
-      expectedDispatchValue = shaderKeyLo;
+    if (shaderWorkload == WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST) {
+      if (!webvulkan_runtime_lookup_expected_dispatch_value(
+            shaderKeyLo,
+            shaderKeyHi,
+            &expectedDispatchValue
+          )) {
+        expectedDispatchValue = shaderKeyLo;
+      }
     }
   }
 
@@ -518,7 +637,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   VkBufferCreateInfo bufferCreateInfo;
   memset(&bufferCreateInfo, 0, sizeof(bufferCreateInfo));
   bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  bufferCreateInfo.size = sizeof(uint32_t);
+  bufferCreateInfo.size = sizeof(uint32_t) * (VkDeviceSize)kSmokeBufferWordCount;
   bufferCreateInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
   bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -563,12 +682,48 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     goto cleanup;
   }
 
-  rc = pfnMapMemory(device, storageMemory, 0u, sizeof(uint32_t), 0u, (void**)&mappedStorageWord);
-  if (rc != VK_SUCCESS || !mappedStorageWord) {
+  rc = pfnMapMemory(device, storageMemory, 0u, sizeof(uint32_t) * (VkDeviceSize)kSmokeBufferWordCount, 0u, (void**)&mappedStorageWords);
+  if (rc != VK_SUCCESS || !mappedStorageWords) {
     smokeRc = 70;
     goto cleanup;
   }
-  mappedStorageWord[0] = 0u;
+  if (shaderWorkload >= WEBVULKAN_RUNTIME_SHADER_WORKLOAD_COUNT) {
+    smokeRc = 77;
+    goto cleanup;
+  }
+  if (shaderWorkload == WEBVULKAN_RUNTIME_SHADER_WORKLOAD_NO_RACE_UNIQUE_WRITES) {
+    uniqueWriteWordCount = dispatchInvocationsPerDispatch;
+    clearWordCount = 1u + uniqueWriteWordCount;
+  }
+  if (clearWordCount > kSmokeBufferWordCount) {
+    smokeRc = 78;
+    goto cleanup;
+  }
+
+  switch (shaderWorkload) {
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST:
+    expectedDispatchAuxValue = 0u;
+    break;
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_ATOMIC_SINGLE_COUNTER:
+    expectedDispatchValue = dispatchInvocationsPerSubmit;
+    expectedDispatchAuxValue = 0u;
+    break;
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_ATOMIC_PER_WORKGROUP:
+    expectedDispatchValue = dispatchGroupsPerDispatch * dispatchesPerSubmit;
+    expectedDispatchAuxValue = 0u;
+    break;
+  case WEBVULKAN_RUNTIME_SHADER_WORKLOAD_NO_RACE_UNIQUE_WRITES:
+    expectedDispatchValue = dispatchInvocationsPerSubmit;
+    expectedDispatchAuxValue = uniqueWriteWordCount;
+    break;
+  default:
+    smokeRc = 79;
+    goto cleanup;
+  }
+
+  for (uint32_t i = 0u; i < clearWordCount; ++i) {
+    mappedStorageWords[i] = 0u;
+  }
 
   VkDescriptorPoolSize descriptorPoolSize;
   memset(&descriptorPoolSize, 0, sizeof(descriptorPoolSize));
@@ -605,7 +760,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   memset(&descriptorBufferInfo, 0, sizeof(descriptorBufferInfo));
   descriptorBufferInfo.buffer = storageBuffer;
   descriptorBufferInfo.offset = 0u;
-  descriptorBufferInfo.range = sizeof(uint32_t);
+  descriptorBufferInfo.range = sizeof(uint32_t) * (VkDeviceSize)kSmokeBufferWordCount;
 
   VkWriteDescriptorSet writeDescriptorSet;
   memset(&writeDescriptorSet, 0, sizeof(writeDescriptorSet));
@@ -665,7 +820,9 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     0u,
     0
   );
-  pfnCmdDispatch(commandBuffer, 1u, 1u, 1u);
+  for (uint32_t dispatchIndex = 0u; dispatchIndex < dispatchesPerSubmit; ++dispatchIndex) {
+    pfnCmdDispatch(commandBuffer, dispatchX, dispatchY, dispatchZ);
+  }
 
   rc = pfnEndCommandBuffer(commandBuffer);
   if (rc != VK_SUCCESS) {
@@ -688,26 +845,70 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   submitInfo.commandBufferCount = 1u;
   submitInfo.pCommandBuffers = &commandBuffer;
 
-  rc = pfnQueueSubmit(queue, 1u, &submitInfo, submitFence);
-  if (rc != VK_SUCCESS) {
-    smokeRc = 67;
-    goto cleanup;
-  }
+  dispatchStartMs = emscripten_get_now();
+  for (uint32_t iteration = 0u; iteration < dispatchSubmitIterations; ++iteration) {
+    for (uint32_t i = 0u; i < clearWordCount; ++i) {
+      mappedStorageWords[i] = 0u;
+    }
+    rc = pfnResetFences(device, 1u, &submitFence);
+    if (rc != VK_SUCCESS) {
+      smokeRc = 74;
+      goto cleanup;
+    }
 
-  rc = pfnWaitForFences(device, 1u, &submitFence, VK_TRUE, UINT64_MAX);
-  if (rc != VK_SUCCESS) {
-    smokeRc = 68;
-    goto cleanup;
-  }
+    rc = pfnQueueSubmit(queue, 1u, &submitInfo, submitFence);
+    if (rc != VK_SUCCESS) {
+      smokeRc = 75;
+      goto cleanup;
+    }
 
-  dispatchObservedValue = mappedStorageWord[0];
-  if (dispatchObservedValue != expectedDispatchValue) {
-    printf("lavapipe runtime smoke dispatch mismatch\n");
-    printf("  shader.dispatch.expected=0x%08x\n", expectedDispatchValue);
-    printf("  shader.dispatch.observed=0x%08x\n", dispatchObservedValue);
-    smokeRc = 73;
-    goto cleanup;
+    rc = pfnWaitForFences(device, 1u, &submitFence, VK_TRUE, UINT64_MAX);
+    if (rc != VK_SUCCESS) {
+      smokeRc = 76;
+      goto cleanup;
+    }
+
+    dispatchObservedValue = mappedStorageWords[0];
+    if (dispatchObservedValue != expectedDispatchValue) {
+      printf("lavapipe runtime smoke dispatch mismatch\n");
+      printf("  shader.dispatch.iteration=%u\n", iteration);
+      printf("  shader.dispatch.expected=0x%08x\n", expectedDispatchValue);
+      printf("  shader.dispatch.observed=0x%08x\n", dispatchObservedValue);
+      printf("  shader.dispatch.expected_u32=%u\n", expectedDispatchValue);
+      printf("  shader.dispatch.observed_u32=%u\n", dispatchObservedValue);
+      smokeRc = 73;
+      goto cleanup;
+    }
+
+    if (shaderWorkload == WEBVULKAN_RUNTIME_SHADER_WORKLOAD_NO_RACE_UNIQUE_WRITES) {
+      uint32_t firstMismatchIndex = UINT32_MAX;
+      uint32_t firstMismatchExpected = 0u;
+      uint32_t firstMismatchObserved = 0u;
+      for (uint32_t i = 0u; i < uniqueWriteWordCount; ++i) {
+        uint32_t expectedValue = i + 1u;
+        uint32_t observedValue = mappedStorageWords[1u + i];
+        if (observedValue != expectedValue) {
+          firstMismatchIndex = i;
+          firstMismatchExpected = expectedValue;
+          firstMismatchObserved = observedValue;
+          break;
+        }
+      }
+      if (firstMismatchIndex != UINT32_MAX) {
+        printf("lavapipe runtime smoke unique write mismatch\n");
+        printf("  shader.dispatch.iteration=%u\n", iteration);
+        printf("  shader.dispatch.unique_index=%u\n", firstMismatchIndex);
+        printf("  shader.dispatch.unique_expected=0x%08x\n", firstMismatchExpected);
+        printf("  shader.dispatch.unique_observed=0x%08x\n", firstMismatchObserved);
+        smokeRc = 80;
+        goto cleanup;
+      }
+      dispatchObservedAuxValue = uniqueWriteWordCount;
+    }
   }
+  dispatchEndMs = emscripten_get_now();
+  g_last_dispatch_wall_ms =
+    (dispatchEndMs - dispatchStartMs) / (double)totalDispatches;
 
   printf("lavapipe runtime smoke ok\n");
   printf("  backend=mesa lavapipe (swrast)\n");
@@ -734,11 +935,27 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("  shader.source=%s\n", shaderSource);
   printf("  shader.entrypoint=%s\n", shaderEntryPoint);
   printf("  shader.code_bytes=%u\n", (unsigned)shaderCodeSizeBytes);
+  printf("  shader.workload=%s\n", shaderWorkloadName);
+  printf("  shader.workgroup_size_x=%u\n", shaderWorkgroupSizeX);
   printf("  shader.create_module=ok\n");
   printf("  shader.create_compute_pipeline=ok\n");
   printf("  shader.dispatch=ok\n");
+  printf("  shader.dispatch.profile=%s\n", benchProfile->name);
+  printf("  shader.dispatch.grid=%ux%ux%u\n", dispatchX, dispatchY, dispatchZ);
+  printf("  shader.dispatch.submit_iterations=%u\n", dispatchSubmitIterations);
+  printf("  shader.dispatch.dispatches_per_submit=%u\n", dispatchesPerSubmit);
+  printf("  shader.dispatch.total_dispatches=%u\n", totalDispatches);
   printf("  shader.dispatch.expected=0x%08x\n", expectedDispatchValue);
   printf("  shader.dispatch.observed=0x%08x\n", dispatchObservedValue);
+  if (shaderWorkload != WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST) {
+    printf("  shader.dispatch.expected_u32=%u\n", expectedDispatchValue);
+    printf("  shader.dispatch.observed_u32=%u\n", dispatchObservedValue);
+  }
+  if (shaderWorkload == WEBVULKAN_RUNTIME_SHADER_WORKLOAD_NO_RACE_UNIQUE_WRITES) {
+    printf("  shader.dispatch.unique_writes_expected=%u\n", expectedDispatchAuxValue);
+    printf("  shader.dispatch.unique_writes_observed=%u\n", dispatchObservedAuxValue);
+  }
+  printf("  shader.dispatch.wall_ms=%.6f\n", g_last_dispatch_wall_ms);
 
 cleanup:
 #if defined(__EMSCRIPTEN__)
@@ -747,9 +964,9 @@ cleanup:
   }
 #endif
   if (device != VK_NULL_HANDLE) {
-    if (mappedStorageWord && pfnUnmapMemory && storageMemory != VK_NULL_HANDLE) {
+    if (mappedStorageWords && pfnUnmapMemory && storageMemory != VK_NULL_HANDLE) {
       pfnUnmapMemory(device, storageMemory);
-      mappedStorageWord = 0;
+      mappedStorageWords = 0;
     }
     if (submitFence != VK_NULL_HANDLE && pfnDestroyFence) {
       pfnDestroyFence(device, submitFence, 0);

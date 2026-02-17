@@ -35,6 +35,7 @@ static int g_runtime_wasm_used = 0;
 static char g_runtime_wasm_provider[WEBVULKAN_RUNTIME_PROVIDER_MAX] = "none";
 static uint32_t g_runtime_active_shader_key_lo = WEBVULKAN_RUNTIME_DEFAULT_SHADER_KEY_LO;
 static uint32_t g_runtime_active_shader_key_hi = WEBVULKAN_RUNTIME_DEFAULT_SHADER_KEY_HI;
+static uint32_t g_runtime_dispatch_mode = WEBVULKAN_RUNTIME_DISPATCH_MODE_FAST_WASM;
 static int g_runtime_captured_shader_key_valid = 0;
 static uint32_t g_runtime_captured_shader_key_lo = 0u;
 static uint32_t g_runtime_captured_shader_key_hi = 0u;
@@ -128,6 +129,19 @@ EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_get_runtime_active_shader_key_lo(void) {
 
 EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_get_runtime_active_shader_key_hi(void) {
   return g_runtime_active_shader_key_hi;
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_dispatch_mode(uint32_t mode) {
+  if (mode != WEBVULKAN_RUNTIME_DISPATCH_MODE_RAW_LLVM_IR &&
+      mode != WEBVULKAN_RUNTIME_DISPATCH_MODE_FAST_WASM) {
+    return -1;
+  }
+  g_runtime_dispatch_mode = mode;
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_get_runtime_dispatch_mode(void) {
+  return g_runtime_dispatch_mode;
 }
 
 EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_expected_dispatch_value(
@@ -378,4 +392,8 @@ void webvulkan_runtime_capture_shader_key(uint32_t keyLo, uint32_t keyHi) {
   g_runtime_captured_shader_key_valid = 1;
   g_runtime_captured_shader_key_lo = keyLo;
   g_runtime_captured_shader_key_hi = keyHi;
+}
+
+int webvulkan_runtime_fast_wasm_enabled(void) {
+  return g_runtime_dispatch_mode == WEBVULKAN_RUNTIME_DISPATCH_MODE_FAST_WASM ? 1 : 0;
 }
