@@ -21,6 +21,9 @@ env:
   WEBVULKAN_CCACHE_VERSION: v1
   LLVM_RELEASE_TAG: llvm-wasm-prebuilt-latest
   PACKAGE_RELEASE_TAG: webvulkan-package-latest
+  DXC_RELEASE_TAG: dxc-wasm-prebuilt-latest
+  DXC_WASM_PREBUILT_URL: ${{ vars.WEBVULKAN_DXC_WASM_PREBUILT_URL || 'https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/dxc-wasm-prebuilt-latest/dxc-wasm-prebuilt.zip' }}
+  DXC_WASM_PREBUILT_SHA256: ${{ vars.WEBVULKAN_DXC_WASM_PREBUILT_SHA256 || '' }}
 
 jobs:
   refresh_prebuilt:
@@ -54,7 +57,7 @@ jobs:
         with:
           path: |
             .3rdparty
-          key: ${{ runner.os }}-webvulkan-refresh-3rdparty-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-${{ hashFiles('CMakeLists.txt', 'cmake/FetchWebVulkanSources.cmake', 'cmake/BuildMesaLlvmpipeWasm.cmake') }}
+          key: ${{ runner.os }}-webvulkan-refresh-3rdparty-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-${{ hashFiles('CMakeLists.txt', 'cmake/FetchWebVulkanSources.cmake', 'cmake/BuildMesaLlvmpipeWasm.cmake') }}-${{ env.DXC_WASM_PREBUILT_SHA256 }}
           restore-keys: |
             ${{ runner.os }}-webvulkan-refresh-3rdparty-${{ env.WEBVULKAN_REFRESH_CACHE_VERSION }}-
 
@@ -90,11 +93,32 @@ jobs:
           ccache --zero-stats
           ccache --show-stats
 
+      - name: Bootstrap DXC Wasm prebuilt
+        shell: bash
+        run: |
+          set -euo pipefail
+          dxc_dir="${GITHUB_WORKSPACE}/.3rdparty/dxc-wasm"
+          dxc_js="${dxc_dir}/dxc.js"
+          dxc_wasm="${dxc_dir}/dxc.wasm"
+          if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
+            mkdir -p "${dxc_dir}"
+            curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
+            if [ -n "${DXC_WASM_PREBUILT_SHA256}" ]; then
+              echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
+            fi
+            python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+              "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
+          fi
+          test -f "${dxc_js}"
+          test -f "${dxc_wasm}"
+          echo "WEBVULKAN_DXC_WASM_JS=${dxc_js}" >> "${GITHUB_ENV}"
+
       - name: Configure latest source refresh build
         run: |
           cmake -S . -B build_refresh -G "${CMAKE_GENERATOR}" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DWEBVULKAN_BUILD_TESTS=ON \
+            -DWEBVULKAN_DXC_WASM_JS="${WEBVULKAN_DXC_WASM_JS}" \
             -DWEBVULKAN_ALLOW_DEP_UPDATES=ON \
             -DWASM_EMSDK_GIT_REF=main \
             -DWASM_EMSDK_VERSION=latest \
@@ -130,6 +154,7 @@ jobs:
           bundles = [
             ("llvm-wasm-install.zip", root / ".3rdparty" / "llvm-wasm-install"),
             ("webvulkan-package.zip", root / "package_refresh"),
+            ("dxc-wasm-prebuilt.zip", root / ".3rdparty" / "dxc-wasm"),
           ]
 
           for zip_name, src_dir in bundles:
@@ -158,6 +183,10 @@ jobs:
             --output-signature release_artifacts/webvulkan-package.zip.sig \
             --output-certificate release_artifacts/webvulkan-package.zip.pem \
             release_artifacts/webvulkan-package.zip
+          cosign sign-blob --yes \
+            --output-signature release_artifacts/dxc-wasm-prebuilt.zip.sig \
+            --output-certificate release_artifacts/dxc-wasm-prebuilt.zip.pem \
+            release_artifacts/dxc-wasm-prebuilt.zip
 
       - name: Prepare release notes
         shell: bash
@@ -179,6 +208,14 @@ jobs:
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo "- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> release_notes/webvulkan-package-latest.md
+
+          cp .github/release-notes/dxc-wasm-prebuilt-latest.md release_notes/dxc-wasm-prebuilt-latest.md
+          {
+            echo
+            echo "Build metadata:"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> release_notes/dxc-wasm-prebuilt-latest.md
 
       - name: Upload refresh artifacts
         uses: actions/upload-artifact@v4
@@ -227,6 +264,26 @@ jobs:
               --notes-file "${PKG_NOTES}"
           fi
 
+      - name: Publish DXC prebuilt release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DXC_ZIP="release_artifacts/dxc-wasm-prebuilt.zip"
+          DXC_SHA="release_artifacts/dxc-wasm-prebuilt.zip.sha256"
+          DXC_SIG="release_artifacts/dxc-wasm-prebuilt.zip.sig"
+          DXC_PEM="release_artifacts/dxc-wasm-prebuilt.zip.pem"
+          DXC_NOTES="release_notes/dxc-wasm-prebuilt-latest.md"
+          if gh release view "${DXC_RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${DXC_RELEASE_TAG}" "${DXC_ZIP}" "${DXC_SHA}" "${DXC_SIG}" "${DXC_PEM}" --clobber
+            gh release edit "${DXC_RELEASE_TAG}" \
+              --title "DXC wasm prebuilt latest" \
+              --notes-file "${DXC_NOTES}"
+          else
+            gh release create "${DXC_RELEASE_TAG}" "${DXC_ZIP}" "${DXC_SHA}" "${DXC_SIG}" "${DXC_PEM}" \
+              --title "DXC wasm prebuilt latest" \
+              --notes-file "${DXC_NOTES}"
+          fi
+
       - name: Update repository variables
         env:
           GH_TOKEN: ${{ github.token }}
@@ -237,6 +294,8 @@ jobs:
           LLVM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${LLVM_RELEASE_TAG}/llvm-wasm-install.zip"
           PKG_SHA="$(cut -d' ' -f1 release_artifacts/webvulkan-package.zip.sha256)"
           PKG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGE_RELEASE_TAG}/webvulkan-package.zip"
+          DXC_SHA="$(cut -d' ' -f1 release_artifacts/dxc-wasm-prebuilt.zip.sha256)"
+          DXC_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${DXC_RELEASE_TAG}/dxc-wasm-prebuilt.zip"
 
           set +e
           gh variable set WEBVULKAN_LLVM_PREBUILT_URL --repo "${GITHUB_REPOSITORY}" --body "${LLVM_URL}"
@@ -247,9 +306,13 @@ jobs:
           STATUS_C=$?
           gh variable set WEBVULKAN_PACKAGE_SHA256 --repo "${GITHUB_REPOSITORY}" --body "${PKG_SHA}"
           STATUS_D=$?
+          gh variable set WEBVULKAN_DXC_WASM_PREBUILT_URL --repo "${GITHUB_REPOSITORY}" --body "${DXC_URL}"
+          STATUS_E=$?
+          gh variable set WEBVULKAN_DXC_WASM_PREBUILT_SHA256 --repo "${GITHUB_REPOSITORY}" --body "${DXC_SHA}"
+          STATUS_F=$?
           set -e
 
-          if [ "${STATUS_A}" -ne 0 ] || [ "${STATUS_B}" -ne 0 ] || [ "${STATUS_C}" -ne 0 ] || [ "${STATUS_D}" -ne 0 ]; then
+          if [ "${STATUS_A}" -ne 0 ] || [ "${STATUS_B}" -ne 0 ] || [ "${STATUS_C}" -ne 0 ] || [ "${STATUS_D}" -ne 0 ] || [ "${STATUS_E}" -ne 0 ] || [ "${STATUS_F}" -ne 0 ]; then
             echo "::warning::Repository variable update was skipped due to permission policy. Releases were still updated."
           fi
 

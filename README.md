@@ -403,6 +403,7 @@ Fairness note for this measurement
 
 - `llvm-wasm-prebuilt-latest` includes LLVM prebuilt bundle only
 - `webvulkan-package-latest` includes relocatable CMake package only
+- `dxc-wasm-prebuilt-latest` includes DXC-in-Wasm prebuilt bundle only
 
 Each channel ships
 

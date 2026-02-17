@@ -22,9 +22,10 @@ env:
   BUILD_TYPE: Release
   CMAKE_GENERATOR: Ninja
   WEBVULKAN_CACHE_VERSION: v3
-  LLVM_PREBUILT_URL: https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/llvm-wasm-prebuilt-latest/llvm-wasm-install.zip
-  LLVM_PREBUILT_SHA256: ""
-  DXC_WASM_PREBUILT_URL: https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/dxc-wasm-prebuilt-latest/dxc-wasm-prebuilt.zip
+  LLVM_PREBUILT_URL: ${{ vars.WEBVULKAN_LLVM_PREBUILT_URL || 'https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/llvm-wasm-prebuilt-latest/llvm-wasm-install.zip' }}
+  LLVM_PREBUILT_SHA256: ${{ vars.WEBVULKAN_LLVM_PREBUILT_SHA256 || '' }}
+  DXC_WASM_PREBUILT_URL: ${{ vars.WEBVULKAN_DXC_WASM_PREBUILT_URL || 'https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/dxc-wasm-prebuilt-latest/dxc-wasm-prebuilt.zip' }}
+  DXC_WASM_PREBUILT_SHA256: ${{ vars.WEBVULKAN_DXC_WASM_PREBUILT_SHA256 || '' }}
 
 jobs:
   in_tree_add_subdirectory:
@@ -51,7 +52,7 @@ jobs:
         with:
           path: |
             .3rdparty
-          key: ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-${{ env.LLVM_PREBUILT_SHA256 }}
+          key: ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-${{ env.LLVM_PREBUILT_SHA256 }}-${{ env.DXC_WASM_PREBUILT_SHA256 }}
           restore-keys: |
             ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-
 
@@ -76,6 +77,9 @@ jobs:
           if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
             mkdir -p "${dxc_dir}"
             curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
+            if [ -n "${DXC_WASM_PREBUILT_SHA256}" ]; then
+              echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
+            fi
             python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
               "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
           fi
@@ -160,7 +164,7 @@ jobs:
         with:
           path: |
             .3rdparty
-          key: ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-${{ env.LLVM_PREBUILT_SHA256 }}
+          key: ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-${{ env.LLVM_PREBUILT_SHA256 }}-${{ env.DXC_WASM_PREBUILT_SHA256 }}
           restore-keys: |
             ${{ runner.os }}-webvulkan-3rdparty-${{ env.WEBVULKAN_CACHE_VERSION }}-
 
@@ -188,6 +192,9 @@ jobs:
           if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
             mkdir -p "${dxc_dir}"
             curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
+            if [ -n "${DXC_WASM_PREBUILT_SHA256}" ]; then
+              echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
+            fi
             python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
               "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
           fi
