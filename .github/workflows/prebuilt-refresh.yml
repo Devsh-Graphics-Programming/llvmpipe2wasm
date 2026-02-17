@@ -22,6 +22,7 @@ env:
   LLVM_RELEASE_TAG: llvm-wasm-prebuilt-latest
   PACKAGE_RELEASE_TAG: webvulkan-package-latest
   DXC_RELEASE_TAG: dxc-wasm-prebuilt-latest
+  MESA_REFRESH_GIT_REF: wasm
   DXC_WASM_PREBUILT_URL: ${{ vars.WEBVULKAN_DXC_WASM_PREBUILT_URL || 'https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/dxc-wasm-prebuilt-latest/dxc-wasm-prebuilt.zip' }}
   DXC_WASM_PREBUILT_SHA256: ${{ vars.WEBVULKAN_DXC_WASM_PREBUILT_SHA256 || '' }}
 
@@ -140,7 +141,7 @@ jobs:
             -DWEBVULKAN_ALLOW_DEP_UPDATES=ON \
             -DWASM_EMSDK_GIT_REF=main \
             -DWASM_EMSDK_VERSION=latest \
-            -DMESA_GIT_REF=main \
+            -DMESA_GIT_REF="${MESA_REFRESH_GIT_REF}" \
             -DLLVM_PROVIDER=source \
             -DLLVM_GIT_REF=main
 
