@@ -5,8 +5,8 @@
 <p align="center">
   <a href="https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/actions/workflows/smoke.yml">
     <img src="https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/actions/workflows/smoke.yml/badge.svg" alt="Build Status" /></a>
-  <a href="https://opensource.org/licenses/Apache-2.0">
-    <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License: Apache 2.0" /></a>
+  <a href="https://www.gnu.org/licenses/agpl-3.0.en.html">
+    <img src="https://img.shields.io/badge/license-AGPL%20v3-blue" alt="License AGPL v3" /></a>
   <a href="https://discord.gg/krsBcABm7u">
     <img src="https://img.shields.io/discord/308323056592486420?label=discord&logo=discord&logoColor=white&color=7289DA" alt="Join our Discord" /></a>
 </p>
@@ -15,66 +15,206 @@
 
 This repository provides a CMake-consumable WebAssembly build of Mesa llvmpipe and lavapipe.
 
-Public link targets:
+## What you get
+
+- CMake targets for wasm llvmpipe and lavapipe
+- In-tree consumption with `add_subdirectory`
+- Relocatable package consumption with `find_package`
+- Runtime shader tooling with DXC in Wasm and Clang in Wasm
+- Fast Wasm shader execution path backend (currently validated on compute dispatch)
+
+Public link targets
 
 - `webvulkan::llvmpipe_wasm`
 - `webvulkan::lavapipe_wasm`
 - `webvulkan::shader_tools`
 
-## Scope
+## What is in Wasm
 
-What this repository does:
-- Builds and exposes Mesa llvmpipe/lavapipe wasm archives as CMake targets
-- Supports in-tree consumption via `add_subdirectory`
-- Supports relocatable package consumption via `find_package`
-- Provides runtime smoke checks for CI validation
+- Clang in Wasm is available for LLVM IR to Wasm module generation
+- DXC in Wasm is available for HLSL to SPIR-V generation
 
-What this repository does not do for consumers:
-- It is not a full Vulkan browser runtime
-- It does not provide a browser app framework or rendering engine
-- It does not replace the consumer's own Vulkan/WebGPU integration layer
+## Why a Mesa fork
 
-Current build mode:
-- Driver output is currently static-only (`.a`)
-- Shared driver output mode is planned
+Mesa source is fetched from
 
-## Mesa fork
-
-This project fetches Mesa from our fork:
 - `https://github.com/Devsh-Graphics-Programming/mesa`
 
-Why we use a fork:
-- We carry a small set of wasm-focused patches needed for this project.
-- Current patch scope is focused on lavapipe build behavior for Emscripten so the driver can be consumed in our wasm flow.
-- Non-Emscripten paths remain unchanged.
+The fork carries wasm-specific patches required for this flow
 
-## Shader toolchain direction
+- Emscripten build and linking adjustments for lavapipe
+- runtime shader key capture and runtime module lookup hooks
+- runtime Wasm dispatch integration for shader execution experiments
 
-Why not LLVM JIT-in-Wasm right now:
-- LLVM maintainer discussion: `https://discourse.llvm.org/t/rfc-building-llvm-for-webassembly/79073`
-- In this project setup, a production-grade in-process LLVM JIT path inside the Wasm sandbox is not currently a practical path.
+Non-Emscripten paths are kept intact.
 
-Why not full NIR->Wasm backend today:
-- Mesa does not ship a complete NIR->Wasm backend for this use case.
-- A full backend from scratch is a large compiler project and not realistic for a single maintainer effort.
+## Why a DXC fork
 
-Current strategy:
-- Keep `clang_wasm_runtime_smoke` as a clang-in-wasm toolchain proof path.
-- Keep Vulkan runtime validation on the current Mesa wasm execution path, while preparing a future direct integration path.
+DXC source is fetched from
+
+- `https://github.com/Devsh-Graphics-Programming/DirectXShaderCompiler/tree/wasm`
+
+The fork carries build-system patches required to compile DXC to Wasm.
+
+## Why no LLVM JIT in Wasm
+
+LLVM maintainers explicitly state LLJIT does not support WebAssembly in this form  
+`https://discourse.llvm.org/t/does-lljit-support-webassembly/74864/3`
+
+That blocks the classic in-process ORC LLJIT path inside the Wasm sandbox.
+
+## Why no full NIR to Wasm backend
+
+Mesa does not ship a production NIR to Wasm backend for this use case.
+Writing and maintaining one from scratch is a large compiler project.
+
+## Our solution
+
+- Use DXC in Wasm to compile HLSL source to SPIR-V at runtime
+- Use Clang in Wasm to compile LLVM IR to Wasm runtime modules
+- Build and ship lavapipe and llvmpipe as CMake-consumable wasm targets
+- Keep the integration path centered on standard Vulkan API usage through lavapipe
+
+## Wait, but you have a big shader tooling payload
+
+- Yes, that is the point and we are fine with it.
+- Tooling artifacts are already distributed in compressed `.zip` bundles.
+- Runtime delivery compression is deployment-specific and should be handled by your host or CDN (gzip or brotli).
+- If this payload size blocks your use case, sponsor NIR-to-Wasm backend work or LLVM JIT in Wasm R&D and contact Devsh Graphics Programming.
+
+## Backend status disclaimer
+
+This backend is under active development.
+Interfaces and behavior can still change while the runtime path is being expanded.
+
+What is implemented now
+
+- Runtime HLSL to SPIR-V compilation in Wasm through DXC
+- Runtime LLVM IR to Wasm module compilation in Wasm through Clang
+- Driver-side shader key registration and runtime Wasm module lookup
+- Fast Wasm execution path validated for Vulkan compute dispatch in CI
+
+What is not implemented yet
+
+- Full Vulkan stage and feature coverage across all real-world shader patterns
+- Full conformance and performance tuning for broad hardware and workload sets
+- Stable long-term public API for the runtime shader tooling layer
+- Shared-driver output mode (current driver artifact is static only)
+
+## How we validate it
+
+We run `runtime_smoke` in CI as the runtime validation test.
+
+The test validates
+
+1. HLSL to SPIR-V compilation with DXC in Wasm.
+2. LLVM IR to Wasm module compilation with Clang in Wasm.
+3. Runtime registration of SPIR-V and Wasm module for the driver shader key.
+4. Vulkan loader flow through Volk using `vk_icdGetInstanceProcAddr` from the wasm ICD path.
+5. Vulkan compute pipeline creation and real dispatch execution.
+6. Output correctness checks for the dispatched shader.
+7. Driver identity and provider checks to confirm the lavapipe wasm path.
+8. Timing comparison between both runtime modes on micro and realistic dispatch profiles.
+
+Runtime modes validated in CI
+
+- `lavapipe_runtime_smoke_fast_wasm`
+- `lavapipe_runtime_smoke_raw_llvm_ir`
+
+Dispatch profiles validated in CI
+
+- `micro` profile for dispatch-overhead sensitivity
+- `realistic` profile for larger dispatch-grid usage
+
+## Gains
+
+On the current local setup we measured
+
+- `micro` profile `fast_wasm` vs `raw_llvm_ir` about `10.55x` lower wall time
+- `realistic` profile `fast_wasm` vs `raw_llvm_ir` about `8.04x` lower wall time
+
+Shader behavior in this benchmark is intentionally simple and deterministic.
+It runs integer mixing ops and writes `0x12345678` into a storage buffer.
+
+Dispatch details in this run
+
+- Workgroup size in this shader is `numthreads(1,1,1)`
+- `micro` profile records `1024` times `vkCmdDispatch(1,1,1)` per submit and runs `16` submits so total dispatch calls are `16384`
+- `realistic` profile records `64` times `vkCmdDispatch(4,1,1)` per submit and runs `8` submits so total dispatch calls are `512`
+- The shader writes and validates one 32-bit value in the bound storage buffer
+
+Log excerpt
+
+```text
+dispatch timing summary
+  mode=fast_wasm
+  profile=micro
+  samples=5
+  min_ms=0.000723
+  avg_ms=0.001163
+  max_ms=0.001605
+proof.execute_path=fast_wasm
+proof.interpreter=disabled_for_dispatch
+proof.llvm_ir_wasm_provider=clang/clang llvm-ir+shared-memory-shim
+
+dispatch timing summary
+  mode=raw_llvm_ir
+  profile=micro
+  samples=5
+  min_ms=0.010564
+  avg_ms=0.012268
+  max_ms=0.013631
+proof.execute_path=inline_wasm_module
+proof.interpreter=not_used
+proof.llvm_ir_wasm_provider=inline-wasm-module
+
+dispatch timing summary
+  mode=fast_wasm
+  profile=realistic
+  samples=5
+  min_ms=0.001315
+  avg_ms=0.001992
+  max_ms=0.002637
+proof.execute_path=fast_wasm
+proof.interpreter=disabled_for_dispatch
+proof.llvm_ir_wasm_provider=clang/clang llvm-ir+shared-memory-shim
+
+dispatch timing summary
+  mode=raw_llvm_ir
+  profile=realistic
+  samples=5
+  min_ms=0.012064
+  avg_ms=0.016007
+  max_ms=0.023143
+proof.execute_path=inline_wasm_module
+proof.interpreter=not_used
+proof.llvm_ir_wasm_provider=inline-wasm-module
+```
+
+Fairness note for this measurement
+
+- Local dev PC `AMD Ryzen 5 5600G` `6C/12T`, `Windows 11 Pro 64-bit (10.0.26200)`
+- The same benchmark output can be verified in this repository GitHub Actions CI logs
+
+## Licensing
+
+This project is licensed under GNU AGPL v3.
+
+For dual licensing including proprietary or commercial terms contact Devsh Graphics Programming.
 
 ## Default dependency mode
 
-Default configuration uses the latest prebuilt LLVM bundle from this repository:
+Default configuration uses the latest prebuilt LLVM bundle from this repository.
 
-- `llvm-wasm-prebuilt-latest` release channel
+- `llvm-wasm-prebuilt-latest`
 
-To force source LLVM build:
+To force source LLVM build
 
 ```powershell
 cmake -S . -B build -G Ninja -DLLVM_PROVIDER=source
 ```
 
-## Use from source (`add_subdirectory`)
+## Use from source with add_subdirectory
 
 ```cmake
 add_subdirectory(path/to/llvmpipe2wasm)
@@ -88,14 +228,32 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-## Build-time shader toolchain helper
+## Use as relocatable package with find_package
 
-This repository exposes a reusable CMake helper:
+Build and install
+
+```powershell
+cmake -S . -B build -G Ninja
+cmake --build build
+cmake --install build --prefix <install-prefix>
+```
+
+Consume
+
+```cmake
+find_package(WebVulkanLlvmpipeWasm REQUIRED CONFIG)
+
+add_executable(my_app src/main.c)
+target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
+```
+
+## Build-time shader helper
+
+Reusable helper
+
 - `webvulkan_compile_opencl_to_spirv(...)`
 
-It compiles OpenCL C source to SPIR-V through Wasmer package runtime (`clspv` entrypoint by default), and can be used directly in consumer builds.
-
-Example:
+Example
 
 ```cmake
 add_subdirectory(path/to/llvmpipe2wasm)
@@ -112,26 +270,7 @@ add_dependencies(my_app my_shaders)
 target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
 ```
 
-## Use as relocatable package (`find_package`)
-
-Build and install:
-
-```powershell
-cmake -S . -B build -G Ninja
-cmake --build build
-cmake --install build --prefix <install-prefix>
-```
-
-Consume:
-
-```cmake
-find_package(WebVulkanLlvmpipeWasm REQUIRED CONFIG)
-
-add_executable(my_app src/main.c)
-target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
-```
-
-The same shader helper is available in package mode:
+The same helper is available in package mode.
 
 ```cmake
 find_package(WebVulkanLlvmpipeWasm REQUIRED CONFIG)
@@ -143,34 +282,25 @@ webvulkan_compile_opencl_to_spirv(
 )
 ```
 
-## Volk smoke path
+## Current limitations
 
-`runtime_smoke` includes a dedicated Volk-based runtime check.
-
-It validates:
-- `volkInitializeCustom` is used with `vk_icdGetInstanceProcAddr` from the linked wasm driver archive
-- Vulkan instance creation and physical device enumeration succeed
-- Required ICD entrypoints are resolved through that same dispatch path
-
-This gives a realistic loader flow for consumers that use Volk, while keeping dispatch pinned to the wasm ICD path.
-
-Current shader-path split:
-- `lavapipe_runtime_smoke` injects runtime-generated SPIR-V (from Wasmer `clspv` by default) into the smoke module and validates Vulkan compute dispatch in the Mesa wasm driver.
-- `clang_wasm_runtime_smoke` validates the clang-in-wasm toolchain path and runs an SPIR-V probe through a Wasmer runtime command (`clspv` package entrypoint by default).
-- If that command is unavailable, smoke falls back to a direct `--target=spirv32` probe and reports the provider and failure reason.
+- Driver output is static only `.a`
+- Shared driver output mode is planned
+- This repository is not a full browser rendering framework
 
 ## Release channels
 
-- `llvm-wasm-prebuilt-latest` contains only the LLVM prebuilt bundle
-- `webvulkan-package-latest` contains only the relocatable CMake package
+- `llvm-wasm-prebuilt-latest` includes LLVM prebuilt bundle only
+- `webvulkan-package-latest` includes relocatable CMake package only
 
-Each channel ships:
+Each channel ships
+
 - bundle `.zip`
 - checksum `.sha256`
 - Sigstore signature `.sig`
 - Sigstore certificate `.pem`
 
-Verify a downloaded bundle:
+Verify a downloaded bundle
 
 ```bash
 sha256sum -c <bundle>.zip.sha256

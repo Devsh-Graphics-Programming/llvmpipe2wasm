@@ -10,6 +10,8 @@ extern "C" {
 
 #define WEBVULKAN_RUNTIME_DEFAULT_SHADER_KEY_LO 0x12345678u
 #define WEBVULKAN_RUNTIME_DEFAULT_SHADER_KEY_HI 0u
+#define WEBVULKAN_RUNTIME_DISPATCH_MODE_RAW_LLVM_IR 0u
+#define WEBVULKAN_RUNTIME_DISPATCH_MODE_FAST_WASM 1u
 
 int webvulkan_register_runtime_shader_spirv(
   uint32_t keyLo,
@@ -44,6 +46,8 @@ void webvulkan_reset_runtime_shader_registry(void);
 int webvulkan_set_runtime_active_shader_key(uint32_t keyLo, uint32_t keyHi);
 uint32_t webvulkan_get_runtime_active_shader_key_lo(void);
 uint32_t webvulkan_get_runtime_active_shader_key_hi(void);
+int webvulkan_set_runtime_dispatch_mode(uint32_t mode);
+uint32_t webvulkan_get_runtime_dispatch_mode(void);
 int webvulkan_set_runtime_expected_dispatch_value(uint32_t keyLo, uint32_t keyHi, uint32_t expectedValue);
 void webvulkan_runtime_reset_captured_shader_key(void);
 int webvulkan_runtime_has_captured_shader_key(void);
@@ -77,6 +81,7 @@ bool webvulkan_runtime_lookup_expected_dispatch_value(
 
 void webvulkan_runtime_mark_wasm_usage(int used, const char* provider);
 void webvulkan_runtime_capture_shader_key(uint32_t keyLo, uint32_t keyHi);
+int webvulkan_runtime_fast_wasm_enabled(void);
 int webvulkan_set_runtime_shader_spirv(const uint8_t* bytes, uint32_t byteCount);
 
 #ifdef __cplusplus
