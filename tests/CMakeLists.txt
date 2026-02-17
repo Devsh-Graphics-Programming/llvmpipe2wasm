@@ -264,22 +264,47 @@ if(_webvulkan_test_mode STREQUAL "in-tree")
     message(FATAL_ERROR "in-tree test mode requires MESA_SRC_DIR")
   endif()
   set(_webvulkan_driver_archive "${WEBVULKAN_DRIVER_ARCHIVE}")
+  if(DEFINED WEBVULKAN_RUNTIME_SHADER_REGISTRY_SOURCE AND NOT WEBVULKAN_RUNTIME_SHADER_REGISTRY_SOURCE STREQUAL "")
+    set(_webvulkan_runtime_registry_source "${WEBVULKAN_RUNTIME_SHADER_REGISTRY_SOURCE}")
+  else()
+    set(_webvulkan_runtime_registry_source "${CMAKE_CURRENT_LIST_DIR}/../runtime/src/webvulkan_shader_runtime_registry.c")
+  endif()
+  if(DEFINED WEBVULKAN_RUNTIME_SHADER_REGISTRY_INCLUDE_DIR AND NOT WEBVULKAN_RUNTIME_SHADER_REGISTRY_INCLUDE_DIR STREQUAL "")
+    set(_webvulkan_runtime_registry_include_dir "${WEBVULKAN_RUNTIME_SHADER_REGISTRY_INCLUDE_DIR}")
+  else()
+    set(_webvulkan_runtime_registry_include_dir "${CMAKE_CURRENT_LIST_DIR}/../runtime/include")
+  endif()
   set(_webvulkan_smoke_include_dirs
     "${MESA_SRC_DIR}/include"
     "${MESA_SRC_DIR}/src"
+    "${_webvulkan_runtime_registry_include_dir}"
   )
 elseif(_webvulkan_test_mode STREQUAL "package")
   if(NOT WEBVULKAN_TEST_PACKAGE_PREFIX)
     message(FATAL_ERROR "package test mode requires WEBVULKAN_TEST_PACKAGE_PREFIX")
   endif()
   set(_webvulkan_driver_archive "${WEBVULKAN_TEST_PACKAGE_PREFIX}/lib/libwebvulkan_driver.a")
+  set(_webvulkan_runtime_registry_source
+    "${WEBVULKAN_TEST_PACKAGE_PREFIX}/share/webvulkan/runtime/src/webvulkan_shader_runtime_registry.c"
+  )
+  set(_webvulkan_runtime_registry_include_dir
+    "${WEBVULKAN_TEST_PACKAGE_PREFIX}/share/webvulkan/runtime/include"
+  )
   set(_webvulkan_smoke_include_dirs
     "${WEBVULKAN_TEST_PACKAGE_PREFIX}/include/mesa"
     "${WEBVULKAN_TEST_PACKAGE_PREFIX}/include/mesa/src"
     "${WEBVULKAN_TEST_PACKAGE_PREFIX}/include/llvm"
+    "${_webvulkan_runtime_registry_include_dir}"
   )
 else()
   message(FATAL_ERROR "Unsupported WEBVULKAN_TEST_MODE='${WEBVULKAN_TEST_MODE}'")
+endif()
+
+if(NOT EXISTS "${_webvulkan_runtime_registry_source}")
+  message(FATAL_ERROR "Runtime shader registry source is missing: ${_webvulkan_runtime_registry_source}")
+endif()
+if(NOT EXISTS "${_webvulkan_runtime_registry_include_dir}/webvulkan/webvulkan_shader_runtime_registry.h")
+  message(FATAL_ERROR "Runtime shader registry include directory is missing: ${_webvulkan_runtime_registry_include_dir}")
 endif()
 
 set(WEBVULKAN_WASM_SMOKE_OK "${WASM_BUILD_DIR}/runtime_smoke.ok")
@@ -302,7 +327,7 @@ add_custom_command(
 )
 add_custom_target(wasm_runtime_smoke DEPENDS "${WEBVULKAN_WASM_SMOKE_OK}")
 
-set(WEBVULKAN_RUNTIME_REGISTRY_SOURCE "${CMAKE_CURRENT_LIST_DIR}/wasm/src/webvulkan_shader_runtime_registry.c")
+set(WEBVULKAN_RUNTIME_REGISTRY_SOURCE "${_webvulkan_runtime_registry_source}")
 set(_webvulkan_lavapipe_depends
   "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
   "${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c"
@@ -363,12 +388,12 @@ function(webvulkan_add_lavapipe_runtime_mode_smoke_target TARGET_NAME RUNTIME_MO
   add_custom_target(${TARGET_NAME} DEPENDS "${_webvulkan_lavapipe_smoke_ok}")
 endfunction()
 
-webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_micro fast_wasm micro)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_micro raw_llvm_ir micro)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_realistic fast_wasm realistic)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_realistic raw_llvm_ir realistic)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_hot_loop fast_wasm hot_loop_single_dispatch)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_hot_loop raw_llvm_ir hot_loop_single_dispatch)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_micro fast_wasm dispatch_overhead)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_micro raw_llvm_ir dispatch_overhead)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_realistic fast_wasm balanced_grid)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_realistic raw_llvm_ir balanced_grid)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_fast_wasm_hot_loop fast_wasm large_grid)
+webvulkan_add_lavapipe_runtime_mode_smoke_target(lavapipe_runtime_smoke_raw_llvm_ir_hot_loop raw_llvm_ir large_grid)
 
 add_custom_target(lavapipe_runtime_smoke_fast_wasm)
 add_dependencies(lavapipe_runtime_smoke_fast_wasm
@@ -398,38 +423,38 @@ if(WEBVULKAN_ENABLE_EXPERIMENTAL_ATOMIC_WORKLOAD_SMOKE)
   webvulkan_add_lavapipe_runtime_mode_smoke_target(
     lavapipe_runtime_smoke_fast_wasm_no_race_unique_writes
     fast_wasm
-    hot_loop_single_dispatch
+    large_grid
     no_race_unique_writes
   )
   webvulkan_add_lavapipe_runtime_mode_smoke_target(
     lavapipe_runtime_smoke_raw_llvm_ir_no_race_unique_writes
     raw_llvm_ir
-    hot_loop_single_dispatch
+    large_grid
     no_race_unique_writes
   )
   webvulkan_add_lavapipe_runtime_mode_smoke_target(
     lavapipe_runtime_smoke_fast_wasm_atomic_single_counter
     fast_wasm
-    hot_loop_single_dispatch
+    large_grid
     atomic_single_counter
   )
   webvulkan_add_lavapipe_runtime_mode_smoke_target(
     lavapipe_runtime_smoke_raw_llvm_ir_atomic_single_counter
     raw_llvm_ir
-    hot_loop_single_dispatch
+    large_grid
     atomic_single_counter
   )
 
   webvulkan_add_lavapipe_runtime_mode_smoke_target(
     lavapipe_runtime_smoke_fast_wasm_atomic_per_workgroup
     fast_wasm
-    hot_loop_single_dispatch
+    large_grid
     atomic_per_workgroup
   )
   webvulkan_add_lavapipe_runtime_mode_smoke_target(
     lavapipe_runtime_smoke_raw_llvm_ir_atomic_per_workgroup
     raw_llvm_ir
-    hot_loop_single_dispatch
+    large_grid
     atomic_per_workgroup
   )
 

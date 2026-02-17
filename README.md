@@ -20,7 +20,7 @@ This repository provides a CMake-consumable WebAssembly build of Mesa llvmpipe a
 - CMake targets for wasm llvmpipe and lavapipe
 - In-tree consumption with `add_subdirectory`
 - Relocatable package consumption with `find_package`
-- Runtime shader tooling with DXC in Wasm and Clang in Wasm
+- Runtime shader tooling path with DXC in Wasm and Clang in Wasm
 - Fast Wasm shader execution path backend (currently validated on compute dispatch)
 
 Public link targets
@@ -28,6 +28,7 @@ Public link targets
 - `webvulkan::llvmpipe_wasm`
 - `webvulkan::lavapipe_wasm`
 - `webvulkan::shader_tools`
+- `webvulkan::runtime_shader_registry`
 
 ## What is in Wasm
 
@@ -101,107 +102,6 @@ What is not implemented yet
 - Stable long-term public API for the runtime shader tooling layer
 - Shared-driver output mode (current driver artifact is static only)
 
-## How we validate it
-
-We run `runtime_smoke` in CI as the runtime validation test.
-
-The test validates
-
-1. HLSL to SPIR-V compilation with DXC in Wasm.
-2. LLVM IR to Wasm module compilation with Clang in Wasm.
-3. Runtime registration of SPIR-V and Wasm module for the driver shader key.
-4. Vulkan loader flow through Volk using `vk_icdGetInstanceProcAddr` from the wasm ICD path.
-5. Vulkan compute pipeline creation and real dispatch execution.
-6. Output correctness checks for the dispatched shader.
-7. Driver identity and provider checks to confirm the lavapipe wasm path.
-8. Timing comparison between both runtime modes on micro and realistic dispatch profiles.
-
-Runtime modes validated in CI
-
-- `lavapipe_runtime_smoke_fast_wasm`
-- `lavapipe_runtime_smoke_raw_llvm_ir`
-
-Dispatch profiles validated in CI
-
-- `micro` profile for dispatch-overhead sensitivity
-- `realistic` profile for larger dispatch-grid usage
-
-## Gains
-
-On the current local setup we measured
-
-- `micro` profile `fast_wasm` vs `raw_llvm_ir` about `10.55x` lower wall time
-- `realistic` profile `fast_wasm` vs `raw_llvm_ir` about `8.04x` lower wall time
-
-Shader behavior in this benchmark is intentionally simple and deterministic.
-It runs integer mixing ops and writes `0x12345678` into a storage buffer.
-
-Dispatch details in this run
-
-- Workgroup size in this shader is `numthreads(1,1,1)`
-- `micro` profile records `1024` times `vkCmdDispatch(1,1,1)` per submit and runs `16` submits so total dispatch calls are `16384`
-- `realistic` profile records `64` times `vkCmdDispatch(4,1,1)` per submit and runs `8` submits so total dispatch calls are `512`
-- The shader writes and validates one 32-bit value in the bound storage buffer
-
-Log excerpt
-
-```text
-dispatch timing summary
-  mode=fast_wasm
-  profile=micro
-  samples=5
-  min_ms=0.000723
-  avg_ms=0.001163
-  max_ms=0.001605
-proof.execute_path=fast_wasm
-proof.interpreter=disabled_for_dispatch
-proof.llvm_ir_wasm_provider=clang/clang llvm-ir+shared-memory-shim
-
-dispatch timing summary
-  mode=raw_llvm_ir
-  profile=micro
-  samples=5
-  min_ms=0.010564
-  avg_ms=0.012268
-  max_ms=0.013631
-proof.execute_path=inline_wasm_module
-proof.interpreter=not_used
-proof.llvm_ir_wasm_provider=inline-wasm-module
-
-dispatch timing summary
-  mode=fast_wasm
-  profile=realistic
-  samples=5
-  min_ms=0.001315
-  avg_ms=0.001992
-  max_ms=0.002637
-proof.execute_path=fast_wasm
-proof.interpreter=disabled_for_dispatch
-proof.llvm_ir_wasm_provider=clang/clang llvm-ir+shared-memory-shim
-
-dispatch timing summary
-  mode=raw_llvm_ir
-  profile=realistic
-  samples=5
-  min_ms=0.012064
-  avg_ms=0.016007
-  max_ms=0.023143
-proof.execute_path=inline_wasm_module
-proof.interpreter=not_used
-proof.llvm_ir_wasm_provider=inline-wasm-module
-```
-
-Fairness note for this measurement
-
-- Local dev PC `AMD Ryzen 5 5600G` `6C/12T`, `Windows 11 Pro 64-bit (10.0.26200)`
-- The same benchmark output can be verified in this repository GitHub Actions CI logs
-
-## Licensing
-
-This project is licensed under GNU AGPL v3.
-
-For dual licensing including proprietary or commercial terms contact Devsh Graphics Programming.
-
 ## Default dependency mode
 
 Default configuration uses the latest prebuilt LLVM bundle from this repository.
@@ -251,7 +151,7 @@ target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
 
 Reusable helper
 
-- `webvulkan_compile_opencl_to_spirv(...)`
+- `webvulkan_compile_hlsl_to_spirv(...)`
 
 Example
 
@@ -259,9 +159,12 @@ Example
 add_subdirectory(path/to/llvmpipe2wasm)
 
 set(MY_SHADER_SPV "${CMAKE_BINARY_DIR}/shaders/write_const.spv")
-webvulkan_compile_opencl_to_spirv(
-  SOURCE "${CMAKE_SOURCE_DIR}/shaders/write_const.cl"
+set(WEBVULKAN_DXC_WASM_JS "${CMAKE_SOURCE_DIR}/tools/dxc-wasm/dxc.js")
+webvulkan_compile_hlsl_to_spirv(
+  SOURCE "${CMAKE_SOURCE_DIR}/shaders/write_const.hlsl"
   OUTPUT "${MY_SHADER_SPV}"
+  HLSL_ENTRYPOINT "main"
+  HLSL_PROFILE "cs_6_0"
 )
 
 add_custom_target(my_shaders DEPENDS "${MY_SHADER_SPV}")
@@ -276,11 +179,219 @@ The same helper is available in package mode.
 find_package(WebVulkanLlvmpipeWasm REQUIRED CONFIG)
 
 set(MY_SHADER_SPV "${CMAKE_BINARY_DIR}/shaders/write_const.spv")
-webvulkan_compile_opencl_to_spirv(
-  SOURCE "${CMAKE_SOURCE_DIR}/shaders/write_const.cl"
+webvulkan_compile_hlsl_to_spirv(
+  SOURCE "${CMAKE_SOURCE_DIR}/shaders/write_const.hlsl"
   OUTPUT "${MY_SHADER_SPV}"
+  DXC_WASM_JS "$ENV{WEBVULKAN_DXC_WASM_JS}"
 )
 ```
+
+## Shader compilation modes
+
+Ahead-of-time mode
+
+- Use `webvulkan_compile_hlsl_to_spirv(...)` in CMake to generate SPIR-V during build.
+
+Runtime mode
+
+- The runtime smoke path compiles HLSL to SPIR-V in runtime through DXC in Wasm.
+- The same smoke flow then compiles and registers the runtime Wasm module for the same shader key before Vulkan dispatch.
+- See `tests/wasm/tools/smoke_runtime.mjs` for the reference runtime orchestration path.
+
+## Runtime shader registry helper
+
+The package exports a CMake helper that attaches the runtime shader registry C source to your target.
+
+- `webvulkan_attach_runtime_shader_registry(TARGET <your_target>)`
+
+Example
+
+```cmake
+add_subdirectory(path/to/llvmpipe2wasm)
+
+add_executable(my_app src/main.c)
+webvulkan_attach_runtime_shader_registry(TARGET my_app)
+target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
+```
+
+In package mode the same helper is available after `find_package(WebVulkanLlvmpipeWasm REQUIRED CONFIG)`.
+
+## How we validate it
+
+We run `runtime_smoke` in CI as the runtime validation test.
+
+The test validates
+
+1. HLSL to SPIR-V compilation with DXC in Wasm.
+2. LLVM IR to Wasm module compilation with Clang in Wasm.
+3. Runtime registration of SPIR-V and Wasm module for the driver shader key.
+4. Vulkan loader flow through Volk using `vk_icdGetInstanceProcAddr` from the wasm ICD path.
+5. Vulkan compute pipeline creation and real dispatch execution.
+6. Output correctness checks for the dispatched shader.
+7. Driver identity and provider checks to confirm the lavapipe wasm path.
+8. Timing comparison between both runtime modes on CI-validated dispatch profiles.
+
+Runtime modes validated in CI
+
+- `lavapipe_runtime_smoke_fast_wasm`
+- `lavapipe_runtime_smoke_raw_llvm_ir`
+
+Dispatch profiles validated in CI
+
+- `dispatch_overhead` profile to stress dispatch call overhead
+- `balanced_grid` profile to run a balanced dispatch-grid layout
+
+Extended dispatch profile used in local and explicit smoke runs
+
+- `large_grid` profile to stress large grid coverage per dispatch
+
+## Gains
+
+On the current local setup we measured
+
+- `dispatch_overhead` profile `fast_wasm` vs `raw_llvm_ir` about `6.13x` lower wall time
+- `balanced_grid` profile `fast_wasm` vs `raw_llvm_ir` about `12.79x` lower wall time
+- `large_grid` profile `fast_wasm` vs `raw_llvm_ir` about `153.10x` lower wall time
+
+CI coverage note
+
+- Default CI smoke validates `dispatch_overhead` and `balanced_grid`.
+- `large_grid` is measured through explicit extended smoke target runs.
+
+Shader behavior in this benchmark is intentionally simple and deterministic.
+It runs integer mixing ops and writes `0x12345678` into a storage buffer.
+
+Dispatch details in this run
+
+- Workgroup size in this shader is `numthreads(1,1,1)`
+- `dispatch_overhead` records `1024` times `vkCmdDispatch(1,1,1)` per submit and runs `16` submits so total dispatch calls are `16384`
+- `balanced_grid` records `256` times `vkCmdDispatch(4,1,1)` per submit and runs `16` submits so total dispatch calls are `4096`
+- `large_grid` records `1` time `vkCmdDispatch(256,1,1)` per submit and runs `64` submits so total dispatch calls are `64`
+- All profiles execute `16384` total shader invocations per run for fair cross-profile comparison
+- The shader writes and validates one 32-bit value in the bound storage buffer
+
+<details>
+<summary>Log excerpt from extended local run (click to expand)</summary>
+
+```text
+dispatch timing summary
+  mode=fast_wasm
+  profile=dispatch_overhead
+  samples=5
+  dispatches_per_submit=1024
+  submit_iterations=16
+  total_dispatches_per_run=16384
+  invocations_per_dispatch=1
+  total_invocations_per_run=16384
+  min_ms=0.001102
+  avg_ms=0.001275
+  max_ms=0.001553
+  min_ns_per_invocation=1101.575
+  avg_ns_per_invocation=1274.652
+  max_ns_per_invocation=1552.795
+proof.execute_path=fast_wasm
+proof.interpreter=disabled_for_dispatch
+proof.llvm_ir_wasm_provider=clang/clang c-runtime+shared-memory-shim
+
+dispatch timing summary
+  mode=raw_llvm_ir
+  profile=dispatch_overhead
+  samples=5
+  dispatches_per_submit=1024
+  submit_iterations=16
+  total_dispatches_per_run=16384
+  invocations_per_dispatch=1
+  total_invocations_per_run=16384
+  min_ms=0.007003
+  avg_ms=0.007820
+  max_ms=0.008926
+  min_ns_per_invocation=7002.985
+  avg_ns_per_invocation=7819.901
+  max_ns_per_invocation=8926.306
+proof.execute_path=raw_llvm_ir
+proof.fast_wasm_provider=raw_llvm_ir
+
+dispatch timing summary
+  mode=fast_wasm
+  profile=balanced_grid
+  samples=5
+  dispatches_per_submit=256
+  submit_iterations=16
+  total_dispatches_per_run=4096
+  invocations_per_dispatch=4
+  total_invocations_per_run=16384
+  min_ms=0.001533
+  avg_ms=0.002188
+  max_ms=0.002730
+  min_ns_per_invocation=383.160
+  avg_ns_per_invocation=546.995
+  max_ns_per_invocation=682.477
+proof.execute_path=fast_wasm
+proof.interpreter=disabled_for_dispatch
+proof.llvm_ir_wasm_provider=clang/clang c-runtime+shared-memory-shim
+
+dispatch timing summary
+  mode=raw_llvm_ir
+  profile=balanced_grid
+  samples=5
+  dispatches_per_submit=256
+  submit_iterations=16
+  total_dispatches_per_run=4096
+  invocations_per_dispatch=4
+  total_invocations_per_run=16384
+  min_ms=0.026282
+  avg_ms=0.027976
+  max_ms=0.031003
+  min_ns_per_invocation=6570.514
+  avg_ns_per_invocation=6994.097
+  max_ns_per_invocation=7750.800
+proof.execute_path=raw_llvm_ir
+proof.fast_wasm_provider=raw_llvm_ir
+
+dispatch timing summary
+  mode=fast_wasm
+  profile=large_grid
+  samples=5
+  dispatches_per_submit=1
+  submit_iterations=64
+  total_dispatches_per_run=64
+  invocations_per_dispatch=256
+  total_invocations_per_run=16384
+  min_ms=0.010723
+  avg_ms=0.017264
+  max_ms=0.024392
+  min_ns_per_invocation=41.888
+  avg_ns_per_invocation=67.439
+  max_ns_per_invocation=95.282
+proof.execute_path=fast_wasm
+proof.interpreter=disabled_for_dispatch
+proof.llvm_ir_wasm_provider=clang/clang c-runtime+shared-memory-shim
+
+dispatch timing summary
+  mode=raw_llvm_ir
+  profile=large_grid
+  samples=5
+  dispatches_per_submit=1
+  submit_iterations=64
+  total_dispatches_per_run=64
+  invocations_per_dispatch=256
+  total_invocations_per_run=16384
+  min_ms=2.298788
+  avg_ms=2.643183
+  max_ms=3.019331
+  min_ns_per_invocation=8979.639
+  avg_ns_per_invocation=10324.934
+  max_ns_per_invocation=11794.263
+proof.execute_path=raw_llvm_ir
+proof.fast_wasm_provider=raw_llvm_ir
+```
+</details>
+
+Fairness note for this measurement
+
+- Local dev PC `AMD Ryzen 5 5600G` `6C/12T`, `Windows 11 Pro 64-bit (10.0.26200)`
+- CI logs validate the same mode comparison for `dispatch_overhead` and `balanced_grid`
+- `large_grid` numbers come from explicit extended local smoke run
 
 ## Current limitations
 
@@ -311,3 +422,9 @@ cosign verify-blob \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   <bundle>.zip
 ```
+
+## Licensing
+
+This project is licensed under GNU AGPL v3.
+
+For dual licensing including proprietary or commercial terms contact Devsh Graphics Programming.

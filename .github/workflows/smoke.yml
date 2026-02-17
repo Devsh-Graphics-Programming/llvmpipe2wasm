@@ -7,6 +7,12 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_extended_smoke:
+        description: Run extended hot-loop runtime smoke profile
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: smoke-${{ github.ref }}
@@ -79,6 +85,11 @@ jobs:
       - name: Build and run in-tree smoke
         run: |
           cmake --build build --target runtime_smoke --config "${BUILD_TYPE}"
+
+      - name: Build and run extended in-tree smoke
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_smoke }}
+        run: |
+          cmake --build build --target lavapipe_runtime_smoke_hot_loop --config "${BUILD_TYPE}"
 
       - name: Install relocatable package
         run: |

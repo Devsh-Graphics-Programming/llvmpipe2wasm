@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 function parseArgs(argv) {
   const parsed = {};
@@ -22,7 +23,10 @@ function parseArgs(argv) {
 
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: options.cwd
+    });
     const stdoutChunks = [];
     const stderrChunks = [];
 
@@ -53,69 +57,85 @@ function firstLine(value) {
   return text.split("\n", 1)[0];
 }
 
+function assertSpirv(bytes, errorContext) {
+  const spirvMagic = Buffer.from([0x03, 0x02, 0x23, 0x07]);
+  if (bytes.length < 4 || !bytes.subarray(0, 4).equals(spirvMagic)) {
+    throw new Error(`${errorContext} did not produce valid SPIR-V`);
+  }
+}
+
+async function compileHlslToSpirv(source, args) {
+  const dxcWasmRaw = args["dxc-wasm-js"] || process.env.WEBVULKAN_DXC_WASM_JS || "";
+  if (!dxcWasmRaw) {
+    throw new Error("HLSL mode requires --dxc-wasm-js or WEBVULKAN_DXC_WASM_JS");
+  }
+  const dxcWasmJs = resolve(dxcWasmRaw);
+
+  const hlslEntrypoint = args["hlsl-entrypoint"] || process.env.WEBVULKAN_HLSL_ENTRYPOINT || "main";
+  const hlslProfile = args["hlsl-profile"] || process.env.WEBVULKAN_HLSL_PROFILE || "cs_6_0";
+
+  const scratchDir = await mkdtemp(join(tmpdir(), "webvulkan-hlsl-dxc-"));
+  const inputFile = "shader.hlsl";
+  const outputFile = "shader.spv";
+  const inputPath = join(scratchDir, inputFile);
+  const outputPath = join(scratchDir, outputFile);
+
+  try {
+    await writeFile(inputPath, source, "utf8");
+    const result = await runProcess(
+      process.execPath,
+      [
+        dxcWasmJs,
+        "-spirv",
+        "-T",
+        hlslProfile,
+        "-E",
+        hlslEntrypoint,
+        "-Fo",
+        outputFile,
+        inputFile
+      ],
+      { stdin: undefined, cwd: scratchDir }
+    );
+
+    if (result.code !== 0) {
+      const reason = firstLine(result.stderr) || `exit_code=${result.code}`;
+      throw new Error(`failed to compile HLSL with dxc-wasm: ${reason}`);
+    }
+
+    const bytes = await readFile(outputPath);
+    assertSpirv(bytes, "dxc-wasm");
+    return {
+      bytes,
+      provider: `dxc-wasm:${dxcWasmJs}`
+    };
+  } finally {
+    await rm(scratchDir, { recursive: true, force: true });
+  }
+}
+
 const args = parseArgs(process.argv.slice(2));
 const inputPath = args.input;
 const outputPath = args.output;
 if (!inputPath || !outputPath) {
   throw new Error("required arguments: --input <path> --output <path>");
 }
-
-const wasmerBin = args.wasmer || process.env.WEBVULKAN_WASMER_BIN || "wasmer";
-const clangPackage = args["clang-package"] || process.env.WEBVULKAN_CLANG_WASM_PACKAGE || "clang/clang";
-const spirvPackage = args["spirv-package"] || process.env.WEBVULKAN_SPIRV_WASM_PACKAGE || "lights0123/llvm-spir";
-const spirvEntrypoint = args["spirv-entrypoint"] || process.env.WEBVULKAN_SPIRV_WASM_ENTRYPOINT || "clspv";
+const language = (args.language || "hlsl").toLowerCase();
 
 const source = await readFile(inputPath, "utf8");
-const attempts = [];
-if (spirvPackage && spirvEntrypoint) {
-  attempts.push({
-    provider: `${spirvPackage}#${spirvEntrypoint}`,
-    args: ["run", "--quiet", spirvPackage, "-e", spirvEntrypoint, "--", "-", "-o", "-"]
-  });
-}
-attempts.push({
-  provider: `${clangPackage} --target=spirv32`,
-  args: [
-    "run",
-    "--quiet",
-    clangPackage,
-    "--",
-    "--target=spirv32",
-    "-x",
-    "cl",
-    "-cl-std=CL2.0",
-    "-c",
-    "-",
-    "-o",
-    "-"
-  ]
-});
-
-const spirvMagic = Buffer.from([0x03, 0x02, 0x23, 0x07]);
-const failureReasons = [];
-let compiledSpirv = null;
-let provider = "";
-
-for (const attempt of attempts) {
-  const result = await runProcess(wasmerBin, attempt.args, { stdin: source });
-  if (result.code === 0 && result.stdout.length >= 4 && result.stdout.subarray(0, 4).equals(spirvMagic)) {
-    compiledSpirv = result.stdout;
-    provider = attempt.provider;
-    break;
-  }
-  const reason = firstLine(result.stderr) || `exit_code=${result.code}`;
-  failureReasons.push(`${attempt.provider}: ${reason}`);
-}
-
-if (!compiledSpirv) {
-  throw new Error(`failed to compile SPIR-V: ${failureReasons.join(" | ")}`);
+let compileResult;
+if (language === "hlsl") {
+  compileResult = await compileHlslToSpirv(source, args);
+} else {
+  throw new Error(`unsupported language: ${language}`);
 }
 
 await mkdir(dirname(outputPath), { recursive: true });
-await writeFile(outputPath, compiledSpirv);
+await writeFile(outputPath, compileResult.bytes);
 
 console.log("webvulkan shader compile ok");
 console.log(`  input=${inputPath}`);
 console.log(`  output=${outputPath}`);
-console.log(`  bytes=${compiledSpirv.length}`);
-console.log(`  provider=${provider}`);
+console.log(`  language=${language}`);
+console.log(`  bytes=${compileResult.bytes.length}`);
+console.log(`  provider=${compileResult.provider}`);

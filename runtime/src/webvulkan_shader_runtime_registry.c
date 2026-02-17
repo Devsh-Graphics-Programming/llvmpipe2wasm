@@ -1,4 +1,4 @@
-#include "webvulkan_shader_runtime_registry.h"
+#include "webvulkan/webvulkan_shader_runtime_registry.h"
 
 #include <emscripten/emscripten.h>
 #include <stddef.h>

@@ -12,31 +12,7 @@ function(_webvulkan_resolve_node OUT_VAR)
   set(${OUT_VAR} "${_node}" PARENT_SCOPE)
 endfunction()
 
-function(_webvulkan_resolve_wasmer OUT_VAR)
-  if(DEFINED WEBVULKAN_WASMER_BIN AND NOT WEBVULKAN_WASMER_BIN STREQUAL "")
-    set(_wasmer "${WEBVULKAN_WASMER_BIN}")
-  else()
-    find_program(_wasmer NAMES wasmer wasmer.exe)
-  endif()
-  if(NOT _wasmer OR NOT EXISTS "${_wasmer}")
-    message(FATAL_ERROR "Wasmer executable not found. Set WEBVULKAN_WASMER_BIN to continue.")
-  endif()
-  set(${OUT_VAR} "${_wasmer}" PARENT_SCOPE)
-endfunction()
-
-function(webvulkan_compile_opencl_to_spirv)
-  set(options)
-  set(oneValueArgs SOURCE OUTPUT NODE_BIN WASMER_BIN CLANG_PACKAGE SPIRV_PACKAGE SPIRV_ENTRYPOINT)
-  set(multiValueArgs DEPENDS)
-  cmake_parse_arguments(WEBVULKAN_SHADER "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-  if(NOT WEBVULKAN_SHADER_SOURCE)
-    message(FATAL_ERROR "webvulkan_compile_opencl_to_spirv requires SOURCE")
-  endif()
-  if(NOT WEBVULKAN_SHADER_OUTPUT)
-    message(FATAL_ERROR "webvulkan_compile_opencl_to_spirv requires OUTPUT")
-  endif()
-
+function(_webvulkan_resolve_shader_compiler_script OUT_VAR)
   if(NOT DEFINED WEBVULKAN_SHADER_COMPILER_SCRIPT OR WEBVULKAN_SHADER_COMPILER_SCRIPT STREQUAL "")
     set(_default_script "${CMAKE_CURRENT_LIST_DIR}/../tools/webvulkan_compile_spirv.mjs")
     if(EXISTS "${_default_script}")
@@ -46,6 +22,35 @@ function(webvulkan_compile_opencl_to_spirv)
   if(NOT EXISTS "${WEBVULKAN_SHADER_COMPILER_SCRIPT}")
     message(FATAL_ERROR "WEBVULKAN_SHADER_COMPILER_SCRIPT does not exist: ${WEBVULKAN_SHADER_COMPILER_SCRIPT}")
   endif()
+  set(${OUT_VAR} "${WEBVULKAN_SHADER_COMPILER_SCRIPT}" PARENT_SCOPE)
+endfunction()
+
+function(_webvulkan_compile_shader_to_spirv)
+  set(options)
+  set(oneValueArgs
+    LANGUAGE
+    SOURCE
+    OUTPUT
+    NODE_BIN
+    DXC_WASM_JS
+    HLSL_ENTRYPOINT
+    HLSL_PROFILE
+  )
+  set(multiValueArgs DEPENDS)
+  cmake_parse_arguments(WEBVULKAN_SHADER "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if(NOT WEBVULKAN_SHADER_LANGUAGE)
+    set(WEBVULKAN_SHADER_LANGUAGE "hlsl")
+  endif()
+
+  if(NOT WEBVULKAN_SHADER_SOURCE)
+    message(FATAL_ERROR "_webvulkan_compile_shader_to_spirv requires SOURCE")
+  endif()
+  if(NOT WEBVULKAN_SHADER_OUTPUT)
+    message(FATAL_ERROR "_webvulkan_compile_shader_to_spirv requires OUTPUT")
+  endif()
+
+  _webvulkan_resolve_shader_compiler_script(_compiler_script)
 
   if(WEBVULKAN_SHADER_NODE_BIN)
     set(_node_bin "${WEBVULKAN_SHADER_NODE_BIN}")
@@ -56,39 +61,6 @@ function(webvulkan_compile_opencl_to_spirv)
     message(FATAL_ERROR "Node.js executable does not exist: ${_node_bin}")
   endif()
 
-  if(WEBVULKAN_SHADER_WASMER_BIN)
-    set(_wasmer_bin "${WEBVULKAN_SHADER_WASMER_BIN}")
-  else()
-    _webvulkan_resolve_wasmer(_wasmer_bin)
-  endif()
-  if(NOT EXISTS "${_wasmer_bin}")
-    message(FATAL_ERROR "Wasmer executable does not exist: ${_wasmer_bin}")
-  endif()
-
-  if(WEBVULKAN_SHADER_CLANG_PACKAGE)
-    set(_clang_package "${WEBVULKAN_SHADER_CLANG_PACKAGE}")
-  elseif(DEFINED WEBVULKAN_CLANG_WASM_PACKAGE AND NOT WEBVULKAN_CLANG_WASM_PACKAGE STREQUAL "")
-    set(_clang_package "${WEBVULKAN_CLANG_WASM_PACKAGE}")
-  else()
-    set(_clang_package "clang/clang")
-  endif()
-
-  if(WEBVULKAN_SHADER_SPIRV_PACKAGE)
-    set(_spirv_package "${WEBVULKAN_SHADER_SPIRV_PACKAGE}")
-  elseif(DEFINED WEBVULKAN_SPIRV_WASM_PACKAGE AND NOT WEBVULKAN_SPIRV_WASM_PACKAGE STREQUAL "")
-    set(_spirv_package "${WEBVULKAN_SPIRV_WASM_PACKAGE}")
-  else()
-    set(_spirv_package "lights0123/llvm-spir")
-  endif()
-
-  if(WEBVULKAN_SHADER_SPIRV_ENTRYPOINT)
-    set(_spirv_entrypoint "${WEBVULKAN_SHADER_SPIRV_ENTRYPOINT}")
-  elseif(DEFINED WEBVULKAN_SPIRV_WASM_ENTRYPOINT AND NOT WEBVULKAN_SPIRV_WASM_ENTRYPOINT STREQUAL "")
-    set(_spirv_entrypoint "${WEBVULKAN_SPIRV_WASM_ENTRYPOINT}")
-  else()
-    set(_spirv_entrypoint "clspv")
-  endif()
-
   get_filename_component(_output_dir "${WEBVULKAN_SHADER_OUTPUT}" DIRECTORY)
   if(_output_dir)
     set(_make_dir_command COMMAND "${CMAKE_COMMAND}" -E make_directory "${_output_dir}")
@@ -96,21 +68,51 @@ function(webvulkan_compile_opencl_to_spirv)
     set(_make_dir_command)
   endif()
 
+  set(_command
+    "${_node_bin}" "${_compiler_script}"
+    --input "${WEBVULKAN_SHADER_SOURCE}"
+    --output "${WEBVULKAN_SHADER_OUTPUT}"
+    --language "${WEBVULKAN_SHADER_LANGUAGE}"
+  )
+
+  if(WEBVULKAN_SHADER_LANGUAGE STREQUAL "hlsl")
+    if(WEBVULKAN_SHADER_DXC_WASM_JS)
+      set(_dxc_wasm_js "${WEBVULKAN_SHADER_DXC_WASM_JS}")
+    elseif(DEFINED WEBVULKAN_DXC_WASM_JS AND NOT WEBVULKAN_DXC_WASM_JS STREQUAL "")
+      set(_dxc_wasm_js "${WEBVULKAN_DXC_WASM_JS}")
+    else()
+      set(_dxc_wasm_js "")
+    endif()
+    if(NOT _dxc_wasm_js OR NOT EXISTS "${_dxc_wasm_js}")
+      message(FATAL_ERROR "HLSL helper requires DXC Wasm JS. Set DXC_WASM_JS or WEBVULKAN_DXC_WASM_JS.")
+    endif()
+    list(APPEND _command --dxc-wasm-js "${_dxc_wasm_js}")
+    if(WEBVULKAN_SHADER_HLSL_ENTRYPOINT)
+      list(APPEND _command --hlsl-entrypoint "${WEBVULKAN_SHADER_HLSL_ENTRYPOINT}")
+    endif()
+    if(WEBVULKAN_SHADER_HLSL_PROFILE)
+      list(APPEND _command --hlsl-profile "${WEBVULKAN_SHADER_HLSL_PROFILE}")
+    endif()
+  else()
+    message(FATAL_ERROR "Unsupported LANGUAGE='${WEBVULKAN_SHADER_LANGUAGE}'. Expected hlsl.")
+  endif()
+
   add_custom_command(
     OUTPUT "${WEBVULKAN_SHADER_OUTPUT}"
     ${_make_dir_command}
-    COMMAND
-      "${_node_bin}" "${WEBVULKAN_SHADER_COMPILER_SCRIPT}"
-      --input "${WEBVULKAN_SHADER_SOURCE}"
-      --output "${WEBVULKAN_SHADER_OUTPUT}"
-      --wasmer "${_wasmer_bin}"
-      --clang-package "${_clang_package}"
-      --spirv-package "${_spirv_package}"
-      --spirv-entrypoint "${_spirv_entrypoint}"
+    COMMAND ${_command}
     DEPENDS
       "${WEBVULKAN_SHADER_SOURCE}"
-      "${WEBVULKAN_SHADER_COMPILER_SCRIPT}"
+      "${_compiler_script}"
       ${WEBVULKAN_SHADER_DEPENDS}
     VERBATIM
   )
+endfunction()
+
+function(webvulkan_compile_hlsl_to_spirv)
+  _webvulkan_compile_shader_to_spirv(LANGUAGE hlsl ${ARGN})
+endfunction()
+
+function(webvulkan_compile_opencl_to_spirv)
+  message(FATAL_ERROR "webvulkan_compile_opencl_to_spirv was removed. Use webvulkan_compile_hlsl_to_spirv.")
 endfunction()

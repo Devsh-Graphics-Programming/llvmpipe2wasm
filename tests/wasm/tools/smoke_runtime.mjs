@@ -49,12 +49,15 @@ function runtimeShaderThreadgroupSizeX(workloadName) {
 
 function runtimeBenchProfileDescriptor(profileName) {
   switch (profileName) {
+    case "dispatch_overhead":
     case "micro":
-      return { dispatchesPerSubmit: 1024, dispatchX: 1, dispatchY: 1, dispatchZ: 1 };
+      return { dispatchesPerSubmit: 1024, submitIterations: 16, dispatchX: 1, dispatchY: 1, dispatchZ: 1 };
+    case "balanced_grid":
     case "realistic":
-      return { dispatchesPerSubmit: 64, dispatchX: 4, dispatchY: 1, dispatchZ: 1 };
+      return { dispatchesPerSubmit: 256, submitIterations: 16, dispatchX: 4, dispatchY: 1, dispatchZ: 1 };
+    case "large_grid":
     case "hot_loop_single_dispatch":
-      return { dispatchesPerSubmit: 1, dispatchX: 256, dispatchY: 1, dispatchZ: 1 };
+      return { dispatchesPerSubmit: 1, submitIterations: 64, dispatchX: 256, dispatchY: 1, dispatchZ: 1 };
     default:
       throw new Error(`Unsupported runtime bench profile '${profileName}'`);
   }
@@ -164,147 +167,56 @@ async function compileRuntimeSpirv(storeValue, workloadName) {
     profile.dispatchZ;
   const dispatchInvocationsPerSubmit = dispatchWorkgroupsPerSubmit * threadgroupSizeX;
   const dxcWasmJs = process.env.WEBVULKAN_DXC_WASM_JS || "";
-  if (dxcWasmJs) {
-    const hlslSource = runtimeShaderHlslSource(
-      storeConst,
-      threadgroupSizeX,
-      workloadName,
-      dispatchInvocationsPerSubmit,
-      dispatchWorkgroupsPerSubmit
-    );
-
-    const scratchDir = await mkdtemp(join(tmpdir(), "webvulkan-dxc-wasm-"));
-    const inputFile = "runtime_smoke.hlsl";
-    const outputFile = "runtime_smoke.spv";
-    const inputPath = join(scratchDir, inputFile);
-    const outputPath = join(scratchDir, outputFile);
-    await writeFile(inputPath, hlslSource, "utf8");
-
-    const compileArgs = [
-      dxcWasmJs,
-      "-spirv",
-      "-T",
-      "cs_6_0",
-      "-E",
-      shaderEntrypoint,
-      "-Fo",
-      outputFile,
-      inputFile
-    ];
-
-    const compileResult = await runProcess(process.execPath, compileArgs, { cwd: scratchDir });
-    if (compileResult.code !== 0) {
-      const reason = firstLine(compileResult.stderr) || `exit_code=${compileResult.code}`;
-      throw new Error(`failed to compile HLSL with dxc-wasm: ${reason}`);
-    }
-
-    const bytes = await readFile(outputPath);
-    await rm(scratchDir, { recursive: true, force: true });
-
-    const spirvMagic = Buffer.from([0x03, 0x02, 0x23, 0x07]);
-    if (bytes.length < 4 || !bytes.subarray(0, 4).equals(spirvMagic)) {
-      throw new Error("dxc-wasm did not produce valid SPIR-V");
-    }
-
-    return {
-      provider: `dxc-wasm:${dxcWasmJs}`,
-      bytes,
-      entrypoint: shaderEntrypoint
-    };
+  if (!dxcWasmJs) {
+    throw new Error("WEBVULKAN_DXC_WASM_JS is required for runtime smoke");
   }
 
-  if (workloadName !== "write_const") {
-    throw new Error(`Workload '${workloadName}' requires WEBVULKAN_DXC_WASM_JS`);
+  const hlslSource = runtimeShaderHlslSource(
+    storeConst,
+    threadgroupSizeX,
+    workloadName,
+    dispatchInvocationsPerSubmit,
+    dispatchWorkgroupsPerSubmit
+  );
+
+  const scratchDir = await mkdtemp(join(tmpdir(), "webvulkan-dxc-wasm-"));
+  const inputFile = "runtime_smoke.hlsl";
+  const outputFile = "runtime_smoke.spv";
+  const inputPath = join(scratchDir, inputFile);
+  const outputPath = join(scratchDir, outputFile);
+  await writeFile(inputPath, hlslSource, "utf8");
+
+  const compileArgs = [
+    dxcWasmJs,
+    "-spirv",
+    "-T",
+    "cs_6_0",
+    "-E",
+    shaderEntrypoint,
+    "-Fo",
+    outputFile,
+    inputFile
+  ];
+
+  const compileResult = await runProcess(process.execPath, compileArgs, { cwd: scratchDir });
+  if (compileResult.code !== 0) {
+    const reason = firstLine(compileResult.stderr) || `exit_code=${compileResult.code}`;
+    throw new Error(`failed to compile HLSL with dxc-wasm: ${reason}`);
   }
 
-  const wasmerBin = process.env.WEBVULKAN_WASMER_BIN;
-  if (!wasmerBin) {
-    throw new Error("WEBVULKAN_WASMER_BIN is required when SMOKE_REQUIRE_RUNTIME_SPIRV=1");
-  }
-
-  const clangPackage = process.env.WEBVULKAN_CLANG_WASM_PACKAGE || "clang/clang";
-  const spirvPackage = process.env.WEBVULKAN_SPIRV_WASM_PACKAGE || clangPackage;
-  const spirvEntrypoint = process.env.WEBVULKAN_SPIRV_WASM_ENTRYPOINT || "";
-  const source = `
-uint webvulkan_mix_const(uint v, uint salt) {
-  v ^= (0x9e3779b9u + salt * 0x7f4a7c15u);
-  v = rotate(v, (uint)5);
-  v = v * 1664525u + 1013904223u;
-  return v;
-}
-
-uint webvulkan_compile_time_chain() {
-  uint v = 0x91e10da5u;
-  for (uint i = 0u; i < 16u; ++i) {
-    v = webvulkan_mix_const(v, i);
-  }
-  return v;
-}
-
-__attribute__((reqd_work_group_size(${threadgroupSizeX}, 1, 1)))
-__kernel void ${shaderEntrypoint}(__global uint* out) {
-  uint folded = webvulkan_compile_time_chain();
-  if (folded == (uint)0xdeadbeefu) {
-    out[1] = folded;
-  }
-  out[0] = ${storeConst};
-}
-`;
-
-  const attempts = [];
-  if (spirvPackage && spirvEntrypoint) {
-    attempts.push({
-      provider: `${spirvPackage}#${spirvEntrypoint}`,
-      args: [
-        "run",
-        "--quiet",
-        spirvPackage,
-        "-e",
-        spirvEntrypoint,
-        "--",
-        "-",
-        "-o",
-        "-"
-      ]
-    });
-  }
-
-  attempts.push({
-    provider: `${clangPackage} --target=spirv32`,
-    args: [
-      "run",
-      "--quiet",
-      clangPackage,
-      "--",
-      "--target=spirv32",
-      "-x",
-      "cl",
-      "-cl-std=CL2.0",
-      "-c",
-      "-",
-      "-o",
-      "-"
-    ]
-  });
+  const bytes = await readFile(outputPath);
+  await rm(scratchDir, { recursive: true, force: true });
 
   const spirvMagic = Buffer.from([0x03, 0x02, 0x23, 0x07]);
-  const failureReasons = [];
-
-  for (const attempt of attempts) {
-    const result = await runProcess(wasmerBin, attempt.args, { stdin: source });
-    if (result.code === 0 && result.stdout.length >= 4 && result.stdout.subarray(0, 4).equals(spirvMagic)) {
-      return {
-        provider: attempt.provider,
-        bytes: result.stdout,
-        entrypoint: shaderEntrypoint
-      };
-    }
-
-    const reason = firstLine(result.stderr) || `exit_code=${result.code}`;
-    failureReasons.push(`${attempt.provider}: ${reason}`);
+  if (bytes.length < 4 || !bytes.subarray(0, 4).equals(spirvMagic)) {
+    throw new Error("dxc-wasm did not produce valid SPIR-V");
   }
 
-  throw new Error(`failed to compile SPIR-V for runtime smoke: ${failureReasons.join(" | ")}`);
+  return {
+    provider: `dxc-wasm:${dxcWasmJs}`,
+    bytes,
+    entrypoint: shaderEntrypoint
+  };
 }
 
 async function compileRuntimeLlvmirToWasm() {
@@ -392,8 +304,11 @@ const requireRuntimeSpirv = process.env.SMOKE_REQUIRE_RUNTIME_SPIRV === "1";
 const runtimeExecutionMode = process.env.WEBVULKAN_RUNTIME_EXECUTION_MODE || "fast_wasm";
 const runtimeBenchIterations = Number.parseInt(process.env.WEBVULKAN_RUNTIME_BENCH_ITERATIONS || "8", 10);
 const runtimeWarmupIterations = Number.parseInt(process.env.WEBVULKAN_RUNTIME_WARMUP_ITERATIONS || "2", 10);
-const runtimeBenchProfile = process.env.WEBVULKAN_RUNTIME_BENCH_PROFILE || "micro";
+const runtimeBenchProfile = process.env.WEBVULKAN_RUNTIME_BENCH_PROFILE || "dispatch_overhead";
 const runtimeBenchProfileMap = new Map([
+  ["dispatch_overhead", 0],
+  ["balanced_grid", 1],
+  ["large_grid", 2],
   ["micro", 0],
   ["realistic", 1],
   ["hot_loop_single_dispatch", 2]
@@ -509,13 +424,32 @@ function summarizeDispatchTimings(mode, profile, samples) {
     sumMs += sample;
   }
   const avgMs = sumMs / samples.length;
+  const profileDesc = runtimeBenchProfileDescriptor(profile);
+  const invocationsPerDispatch =
+    profileDesc.dispatchX *
+    profileDesc.dispatchY *
+    profileDesc.dispatchZ *
+    runtimeShaderThreadgroupSizeX(runtimeShaderWorkload);
+  const totalDispatchesPerRun = profileDesc.dispatchesPerSubmit * profileDesc.submitIterations;
+  const totalInvocationsPerRun = totalDispatchesPerRun * invocationsPerDispatch;
+  const minNsPerInvocation = (minMs * 1_000_000.0) / invocationsPerDispatch;
+  const avgNsPerInvocation = (avgMs * 1_000_000.0) / invocationsPerDispatch;
+  const maxNsPerInvocation = (maxMs * 1_000_000.0) / invocationsPerDispatch;
   console.log("dispatch timing summary");
   console.log(`  mode=${mode}`);
   console.log(`  profile=${profile}`);
   console.log(`  samples=${samples.length}`);
+  console.log(`  dispatches_per_submit=${profileDesc.dispatchesPerSubmit}`);
+  console.log(`  submit_iterations=${profileDesc.submitIterations}`);
+  console.log(`  total_dispatches_per_run=${totalDispatchesPerRun}`);
+  console.log(`  invocations_per_dispatch=${invocationsPerDispatch}`);
+  console.log(`  total_invocations_per_run=${totalInvocationsPerRun}`);
   console.log(`  min_ms=${minMs.toFixed(6)}`);
   console.log(`  avg_ms=${avgMs.toFixed(6)}`);
   console.log(`  max_ms=${maxMs.toFixed(6)}`);
+  console.log(`  min_ns_per_invocation=${minNsPerInvocation.toFixed(3)}`);
+  console.log(`  avg_ns_per_invocation=${avgNsPerInvocation.toFixed(3)}`);
+  console.log(`  max_ns_per_invocation=${maxNsPerInvocation.toFixed(3)}`);
 }
 
 function setRuntimeDispatchMode(modeValue) {
