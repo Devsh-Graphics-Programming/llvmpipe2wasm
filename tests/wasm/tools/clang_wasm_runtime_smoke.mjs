@@ -5,6 +5,10 @@ if (!wasmerBin) {
   throw new Error("WEBVULKAN_WASMER_BIN is not set");
 }
 
+const clangPackage = process.env.WEBVULKAN_CLANG_WASM_PACKAGE || "clang/clang";
+const spirvPackage = process.env.WEBVULKAN_SPIRV_WASM_PACKAGE || clangPackage;
+const spirvEntrypoint = process.env.WEBVULKAN_SPIRV_WASM_ENTRYPOINT || "";
+
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
@@ -30,6 +34,14 @@ function runProcess(command, args, options = {}) {
   });
 }
 
+function firstLine(value) {
+  const text = (value || "").trim();
+  if (!text) {
+    return "";
+  }
+  return text.split("\n", 1)[0];
+}
+
 const shaderLikeSource = `
 void __wasm_signal(void) {
 }
@@ -49,7 +61,7 @@ const compileResult = await runProcess(
   [
     "run",
     "--quiet",
-    "clang/clang",
+    clangPackage,
     "--",
     "--target=wasm32-unknown-unknown",
     "-O2",
@@ -103,17 +115,37 @@ if (storeResult !== 33) {
 }
 
 const spirvProbeSource = `
-__kernel void write_const(__global unsigned int* out) {
+__kernel void write_const(__global uint* out) {
   out[0] = 0x12345678u;
 }
 `;
 
-const spirvProbeResult = await runProcess(
-  wasmerBin,
-  [
+const spirvMagic = Buffer.from([0x03, 0x02, 0x23, 0x07]);
+const probeAttempts = [];
+
+if (spirvPackage && spirvEntrypoint) {
+  probeAttempts.push({
+    provider: `${spirvPackage}#${spirvEntrypoint}`,
+    args: [
+      "run",
+      "--quiet",
+      spirvPackage,
+      "-e",
+      spirvEntrypoint,
+      "--",
+      "-",
+      "-o",
+      "-"
+    ]
+  });
+}
+
+probeAttempts.push({
+  provider: `${clangPackage} --target=spirv32`,
+  args: [
     "run",
     "--quiet",
-    "clang/clang",
+    clangPackage,
     "--",
     "--target=spirv32",
     "-x",
@@ -123,33 +155,40 @@ const spirvProbeResult = await runProcess(
     "-",
     "-o",
     "-"
-  ],
-  { stdin: spirvProbeSource }
-);
+  ]
+});
 
-const spirvMagic = Buffer.from([0x03, 0x02, 0x23, 0x07]);
 let spirvProbeStatus = "unavailable";
+let spirvProbeProvider = "none";
 let spirvProbeReason = "unknown";
-if (spirvProbeResult.code === 0 && spirvProbeResult.stdout.length >= 4 && spirvProbeResult.stdout.subarray(0, 4).equals(spirvMagic)) {
-  spirvProbeStatus = "available";
-  spirvProbeReason = `bytes=${spirvProbeResult.stdout.length}`;
-} else {
-  const stderr = spirvProbeResult.stderr.trim();
-  if (stderr.includes("llvm-spirv")) {
-    spirvProbeReason = "missing llvm-spirv tool inside clang/clang package";
-  } else if (stderr) {
-    spirvProbeReason = stderr.split("\n")[0];
+for (const attempt of probeAttempts) {
+  const result = await runProcess(wasmerBin, attempt.args, { stdin: spirvProbeSource });
+  if (result.code === 0 && result.stdout.length >= 4 && result.stdout.subarray(0, 4).equals(spirvMagic)) {
+    spirvProbeStatus = "available";
+    spirvProbeProvider = attempt.provider;
+    spirvProbeReason = `bytes=${result.stdout.length}`;
+    break;
+  }
+
+  const reason = firstLine(result.stderr) || `exit_code=${result.code}`;
+  if (spirvProbeReason === "unknown") {
+    spirvProbeReason = `${attempt.provider}: ${reason}`;
   } else {
-    spirvProbeReason = `exit_code=${spirvProbeResult.code}`;
+    spirvProbeReason = `${spirvProbeReason} | ${attempt.provider}: ${reason}`;
   }
 }
 
 console.log("clang wasm smoke ok");
-console.log("  tool=wasmer clang/clang");
+console.log("  tool=wasmer");
+console.log(`  compiler.package=${clangPackage}`);
 console.log("  compiler.target=wasm32-unknown-unknown");
 console.log("  output.magic=wasm");
 console.log(`  export.shader_add=${addResult}`);
 console.log(`  export.shader_store=${storeResult}`);
+console.log(`  spirv.package=${spirvPackage}`);
+console.log(`  spirv.entrypoint=${spirvEntrypoint || "(none)"}`);
 console.log(`  spirv_probe=${spirvProbeStatus}`);
+console.log(`  spirv_probe_provider=${spirvProbeProvider}`);
 console.log(`  spirv_probe_reason=${spirvProbeReason}`);
 console.log("runtime smoke passed");
+

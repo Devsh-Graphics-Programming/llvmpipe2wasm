@@ -26,6 +26,32 @@ static const uint32_t kSmokeComputeSpirv[] = {
   0x00000000u, 0x00000003u, 0x000200f8u, 0x00000005u, 0x00050041u, 0x0000000du, 0x0000000eu, 0x00000009u,
   0x0000000bu, 0x0003003eu, 0x0000000eu, 0x0000000cu, 0x000100fdu, 0x00010038u
 };
+
+static uint8_t* g_runtime_shader_spirv = 0;
+static uint32_t g_runtime_shader_spirv_size = 0u;
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_shader_spirv(const uint8_t* bytes, uint32_t byteCount) {
+  if (!bytes || byteCount < 4u || (byteCount % 4u) != 0u) {
+    return -1;
+  }
+  if (bytes[0] != 0x03u || bytes[1] != 0x02u || bytes[2] != 0x23u || bytes[3] != 0x07u) {
+    return -2;
+  }
+
+  uint8_t* copy = (uint8_t*)malloc(byteCount);
+  if (!copy) {
+    return -3;
+  }
+  memcpy(copy, bytes, byteCount);
+
+  if (g_runtime_shader_spirv) {
+    free(g_runtime_shader_spirv);
+  }
+  g_runtime_shader_spirv = copy;
+  g_runtime_shader_spirv_size = byteCount;
+  return 0;
+}
+
 static int string_contains(const char* haystack, const char* needle) {
   return haystack && needle && strstr(haystack, needle) != 0;
 }
@@ -93,6 +119,8 @@ static uint32_t find_memory_type_index(
 }
 
 EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
+  printf("lavapipe runtime smoke stage=begin\n");
+  fflush(stdout);
   int smokeRc = 0;
   VkResult rc = VK_SUCCESS;
   VkInstance instance = VK_NULL_HANDLE;
@@ -111,6 +139,10 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   VkFence submitFence = VK_NULL_HANDLE;
   VkQueue queue = VK_NULL_HANDLE;
   uint32_t dispatchObservedValue = 0u;
+  const uint32_t* shaderCodeWords = kSmokeComputeSpirv;
+  size_t shaderCodeSizeBytes = sizeof(kSmokeComputeSpirv);
+  const char* shaderSource = "embedded_static_spirv";
+  const char* shaderEntryPoint = "main";
   PFN_vkDestroyDevice pfnDestroyDevice = 0;
   PFN_vkGetPhysicalDeviceMemoryProperties pfnGetPhysicalDeviceMemoryProperties = 0;
   PFN_vkCreateShaderModule pfnCreateShaderModule = 0;
@@ -176,6 +208,8 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   createInfo.pApplicationInfo = &appInfo;
 
   rc = vkCreateInstance(&createInfo, 0, &instance);
+  printf("lavapipe runtime smoke stage=after_vkCreateInstance rc=%d\n", (int)rc);
+  fflush(stdout);
   if (rc != VK_SUCCESS || instance == VK_NULL_HANDLE) {
     smokeRc = 23;
     goto cleanup;
@@ -190,6 +224,8 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
 
   uint32_t physicalDeviceCount = 0u;
   rc = vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, 0);
+  printf("lavapipe runtime smoke stage=after_vkEnumeratePhysicalDevices_count rc=%d count=%u\n", (int)rc, physicalDeviceCount);
+  fflush(stdout);
   if (rc != VK_SUCCESS || physicalDeviceCount == 0u) {
     smokeRc = 25;
     goto cleanup;
@@ -255,6 +291,8 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   deviceCreateInfo.pEnabledFeatures = &enabledFeatures;
 
   rc = vkCreateDevice(physicalDevice, &deviceCreateInfo, 0, &device);
+  printf("lavapipe runtime smoke stage=after_vkCreateDevice rc=%d\n", (int)rc);
+  fflush(stdout);
   if (rc != VK_SUCCESS || device == VK_NULL_HANDLE) {
     smokeRc = 30;
     goto cleanup;
@@ -389,13 +427,22 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     goto cleanup;
   }
 
+  if (g_runtime_shader_spirv && g_runtime_shader_spirv_size >= 4u && (g_runtime_shader_spirv_size % 4u) == 0u) {
+    shaderCodeWords = (const uint32_t*)g_runtime_shader_spirv;
+    shaderCodeSizeBytes = (size_t)g_runtime_shader_spirv_size;
+    shaderSource = "runtime_injected_spirv";
+    shaderEntryPoint = "write_const";
+  }
+
   VkShaderModuleCreateInfo shaderCreateInfo;
   memset(&shaderCreateInfo, 0, sizeof(shaderCreateInfo));
   shaderCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-  shaderCreateInfo.codeSize = sizeof(kSmokeComputeSpirv);
-  shaderCreateInfo.pCode = kSmokeComputeSpirv;
+  shaderCreateInfo.codeSize = shaderCodeSizeBytes;
+  shaderCreateInfo.pCode = shaderCodeWords;
 
   rc = pfnCreateShaderModule(device, &shaderCreateInfo, 0, &shaderModule);
+  printf("lavapipe runtime smoke stage=after_vkCreateShaderModule rc=%d\n", (int)rc);
+  fflush(stdout);
   if (rc != VK_SUCCESS || shaderModule == VK_NULL_HANDLE) {
     smokeRc = 32;
     goto cleanup;
@@ -437,7 +484,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   shaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   shaderStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
   shaderStage.module = shaderModule;
-  shaderStage.pName = "main";
+  shaderStage.pName = shaderEntryPoint;
 
   VkComputePipelineCreateInfo pipelineCreateInfo;
   memset(&pipelineCreateInfo, 0, sizeof(pipelineCreateInfo));
@@ -446,6 +493,8 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   pipelineCreateInfo.layout = pipelineLayout;
 
   rc = pfnCreateComputePipelines(device, VK_NULL_HANDLE, 1u, &pipelineCreateInfo, 0, &computePipeline);
+  printf("lavapipe runtime smoke stage=after_vkCreateComputePipelines rc=%d\n", (int)rc);
+  fflush(stdout);
   if (rc != VK_SUCCESS || computePipeline == VK_NULL_HANDLE) {
     smokeRc = 34;
     goto cleanup;
@@ -676,6 +725,9 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("  proof.device_name_contains_llvmpipe=%s\n", proofDeviceName ? "yes" : "no");
   printf("  proof.driver_name_contains_llvmpipe=%s\n", proofDriverName ? "yes" : "no");
   printf("  vulkan_loader=volk (custom vk_icdGetInstanceProcAddr)\n");
+  printf("  shader.source=%s\n", shaderSource);
+  printf("  shader.entrypoint=%s\n", shaderEntryPoint);
+  printf("  shader.code_bytes=%u\n", (unsigned)shaderCodeSizeBytes);
   printf("  shader.create_module=ok\n");
   printf("  shader.create_compute_pipeline=ok\n");
   printf("  shader.dispatch=ok\n");
@@ -683,6 +735,11 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("  shader.dispatch.observed=0x%08x\n", dispatchObservedValue);
 
 cleanup:
+#if defined(__EMSCRIPTEN__)
+  if (smokeRc == 0) {
+    return 0;
+  }
+#endif
   if (device != VK_NULL_HANDLE) {
     if (mappedStorageWord && pfnUnmapMemory && storageMemory != VK_NULL_HANDLE) {
       pfnUnmapMemory(device, storageMemory);

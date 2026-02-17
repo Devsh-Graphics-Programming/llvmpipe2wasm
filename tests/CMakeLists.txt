@@ -20,6 +20,10 @@ set(WEBVULKAN_TEST_PACKAGE_PREFIX "" CACHE PATH "Install prefix for WebVulkan pa
 set(WEBVULKAN_TEST_WASM_BUILD_DIR "${CMAKE_BINARY_DIR}/wasm" CACHE PATH "WASM smoke build directory")
 set(WEBVULKAN_TEST_NODE_BIN "" CACHE FILEPATH "Path to node executable used by runtime smoke scripts")
 set(WEBVULKAN_WASMER_BIN "" CACHE FILEPATH "Path to wasmer executable used by clang wasm runtime smoke")
+set(WEBVULKAN_DXC_WASM_JS "" CACHE FILEPATH "Path to dxc.js built for Wasm runtime HLSL->SPIR-V smoke")
+set(WEBVULKAN_CLANG_WASM_PACKAGE "clang/clang" CACHE STRING "Wasmer package used for clang-in-wasm smoke")
+set(WEBVULKAN_SPIRV_WASM_PACKAGE "lights0123/llvm-spir" CACHE STRING "Wasmer package used for SPIR-V probe in clang wasm smoke")
+set(WEBVULKAN_SPIRV_WASM_ENTRYPOINT "clspv" CACHE STRING "Wasmer command used for SPIR-V probe in clang wasm smoke")
 
 if(NOT COMMAND CPMAddPackage)
   if(NOT DEFINED WEBVULKAN_CPM_VERSION OR WEBVULKAN_CPM_VERSION STREQUAL "")
@@ -190,6 +194,26 @@ if(NOT WEBVULKAN_WASMER_BIN OR NOT EXISTS "${WEBVULKAN_WASMER_BIN}")
 endif()
 set(WEBVULKAN_WASMER_BIN "${WEBVULKAN_WASMER_BIN}" CACHE FILEPATH "Path to wasmer executable used by clang wasm runtime smoke" FORCE)
 
+if((NOT WEBVULKAN_DXC_WASM_JS OR WEBVULKAN_DXC_WASM_JS MATCHES "-NOTFOUND$") AND DEFINED ENV{WEBVULKAN_DXC_WASM_JS} AND NOT "$ENV{WEBVULKAN_DXC_WASM_JS}" STREQUAL "")
+  set(WEBVULKAN_DXC_WASM_JS "$ENV{WEBVULKAN_DXC_WASM_JS}")
+endif()
+if(NOT WEBVULKAN_DXC_WASM_JS OR WEBVULKAN_DXC_WASM_JS MATCHES "-NOTFOUND$")
+  set(_webvulkan_dxc_wasm_hints
+    "${CMAKE_CURRENT_LIST_DIR}/../tmp/dxc-wasm-build/bin/dxc.js"
+    "${CMAKE_CURRENT_LIST_DIR}/../tmp/dxc-wasm-build/bin/dxc.mjs"
+  )
+  foreach(_webvulkan_dxc_wasm_candidate IN LISTS _webvulkan_dxc_wasm_hints)
+    if(EXISTS "${_webvulkan_dxc_wasm_candidate}")
+      set(WEBVULKAN_DXC_WASM_JS "${_webvulkan_dxc_wasm_candidate}")
+      break()
+    endif()
+  endforeach()
+endif()
+if(NOT WEBVULKAN_DXC_WASM_JS OR NOT EXISTS "${WEBVULKAN_DXC_WASM_JS}")
+  message(FATAL_ERROR "dxc.js built for Wasm is required for runtime HLSL smoke. Set WEBVULKAN_DXC_WASM_JS.")
+endif()
+set(WEBVULKAN_DXC_WASM_JS "${WEBVULKAN_DXC_WASM_JS}" CACHE FILEPATH "Path to dxc.js built for Wasm runtime HLSL->SPIR-V smoke" FORCE)
+
 if(NOT COMMAND webvulkan_fetch_git_source)
   set(_webvulkan_root_fetch_sources "${CMAKE_CURRENT_LIST_DIR}/../cmake/FetchWebVulkanSources.cmake")
   if(EXISTS "${_webvulkan_root_fetch_sources}")
@@ -277,6 +301,7 @@ set(_webvulkan_lavapipe_depends
   "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
   "${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c"
   "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs"
+  "${WEBVULKAN_DXC_WASM_JS}"
   "${_webvulkan_volk_source}"
   "${_webvulkan_volk_header}"
   "${_webvulkan_driver_archive}"
@@ -297,6 +322,12 @@ add_custom_command(
     -DSMOKE_JS_OUT=${WEBVULKAN_LAVAPIPE_SMOKE_JS}
     -DSMOKE_EXPORT=_lavapipe_runtime_smoke
     -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
+    -DSMOKE_REQUIRE_RUNTIME_SPIRV=1
+    -DSMOKE_WASMER_BIN=${WEBVULKAN_WASMER_BIN}
+    -DSMOKE_DXC_WASM_JS=${WEBVULKAN_DXC_WASM_JS}
+    -DSMOKE_CLANG_WASM_PACKAGE=${WEBVULKAN_CLANG_WASM_PACKAGE}
+    -DSMOKE_SPIRV_WASM_PACKAGE=${WEBVULKAN_SPIRV_WASM_PACKAGE}
+    -DSMOKE_SPIRV_WASM_ENTRYPOINT=${WEBVULKAN_SPIRV_WASM_ENTRYPOINT}
     -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
     -DVOLK_SOURCE=${_webvulkan_volk_source}
     -P "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
@@ -331,6 +362,7 @@ add_custom_command(
     -DSMOKE_JS_OUT=${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_JS}
     -DSMOKE_EXPORT=_poc_nir_to_wasm_smoke
     -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
+    -DSMOKE_REQUIRE_RUNTIME_SPIRV=0
     -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
     -DVOLK_SOURCE=${_webvulkan_volk_source}
     -P "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
@@ -347,6 +379,9 @@ add_custom_command(
   COMMAND
     "${CMAKE_COMMAND}" -E env
     "WEBVULKAN_WASMER_BIN=${WEBVULKAN_WASMER_BIN}"
+    "WEBVULKAN_CLANG_WASM_PACKAGE=${WEBVULKAN_CLANG_WASM_PACKAGE}"
+    "WEBVULKAN_SPIRV_WASM_PACKAGE=${WEBVULKAN_SPIRV_WASM_PACKAGE}"
+    "WEBVULKAN_SPIRV_WASM_ENTRYPOINT=${WEBVULKAN_SPIRV_WASM_ENTRYPOINT}"
     "${WEBVULKAN_TEST_NODE_BIN}" "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/clang_wasm_runtime_smoke.mjs"
   COMMAND "${CMAKE_COMMAND}" -E touch "${WEBVULKAN_CLANG_WASM_SMOKE_OK}"
   DEPENDS "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/clang_wasm_runtime_smoke.mjs"
