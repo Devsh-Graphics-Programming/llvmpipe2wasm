@@ -21,9 +21,10 @@ concurrency:
 env:
   BUILD_TYPE: Release
   CMAKE_GENERATOR: Ninja
-  WEBVULKAN_CACHE_VERSION: v2
+  WEBVULKAN_CACHE_VERSION: v3
   LLVM_PREBUILT_URL: ${{ vars.WEBVULKAN_LLVM_PREBUILT_URL }}
   LLVM_PREBUILT_SHA256: ${{ vars.WEBVULKAN_LLVM_PREBUILT_SHA256 }}
+  DXC_WASM_PREBUILT_URL: https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/dxc-wasm-prebuilt-latest/dxc-wasm-prebuilt.zip
 
 jobs:
   in_tree_add_subdirectory:
@@ -72,11 +73,37 @@ jobs:
             exit 1
           fi
 
+      - name: Bootstrap DXC Wasm prebuilt
+        shell: bash
+        run: |
+          set -euo pipefail
+          dxc_dir="${GITHUB_WORKSPACE}/.3rdparty/dxc-wasm"
+          dxc_js="${dxc_dir}/dxc.js"
+          dxc_wasm="${dxc_dir}/dxc.wasm"
+          if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
+            mkdir -p "${dxc_dir}"
+            curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
+            python3 - "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}" <<'PY'
+import sys
+import zipfile
+
+zip_path = sys.argv[1]
+dst_dir = sys.argv[2]
+
+with zipfile.ZipFile(zip_path) as archive:
+    archive.extractall(dst_dir)
+PY
+          fi
+          test -f "${dxc_js}"
+          test -f "${dxc_wasm}"
+          echo "WEBVULKAN_DXC_WASM_JS=${dxc_js}" >> "${GITHUB_ENV}"
+
       - name: Configure root project
         run: |
           cmake -S . -B build -G "${CMAKE_GENERATOR}" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DWEBVULKAN_BUILD_TESTS=ON \
+            -DWEBVULKAN_DXC_WASM_JS="${WEBVULKAN_DXC_WASM_JS}" \
             -DWEBVULKAN_ALLOW_DEP_UPDATES=OFF \
             -DLLVM_PROVIDER=prebuilt \
             -DLLVM_PREBUILT_URL="${LLVM_PREBUILT_URL}" \
@@ -166,12 +193,38 @@ jobs:
             exit 1
           fi
 
+      - name: Bootstrap DXC Wasm prebuilt
+        shell: bash
+        run: |
+          set -euo pipefail
+          dxc_dir="${GITHUB_WORKSPACE}/.3rdparty/dxc-wasm"
+          dxc_js="${dxc_dir}/dxc.js"
+          dxc_wasm="${dxc_dir}/dxc.wasm"
+          if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
+            mkdir -p "${dxc_dir}"
+            curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
+            python3 - "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}" <<'PY'
+import sys
+import zipfile
+
+zip_path = sys.argv[1]
+dst_dir = sys.argv[2]
+
+with zipfile.ZipFile(zip_path) as archive:
+    archive.extractall(dst_dir)
+PY
+          fi
+          test -f "${dxc_js}"
+          test -f "${dxc_wasm}"
+          echo "WEBVULKAN_DXC_WASM_JS=${dxc_js}" >> "${GITHUB_ENV}"
+
       - name: Configure sparse tests against package
         run: |
           cmake -S tests-only/tests -B tests-only/build -G "${CMAKE_GENERATOR}" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DWEBVULKAN_TEST_MODE=package \
             -DWEBVULKAN_TEST_PACKAGE_PREFIX="${GITHUB_WORKSPACE}/package" \
+            -DWEBVULKAN_DXC_WASM_JS="${WEBVULKAN_DXC_WASM_JS}" \
             -DEMSDK_ROOT="${GITHUB_WORKSPACE}/.3rdparty/emsdk" \
             -DWEBVULKAN_EMSCRIPTEN_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.3rdparty/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
 

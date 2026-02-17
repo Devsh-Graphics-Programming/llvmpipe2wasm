@@ -206,6 +206,8 @@ if((NOT WEBVULKAN_DXC_WASM_JS OR WEBVULKAN_DXC_WASM_JS MATCHES "-NOTFOUND$") AND
 endif()
 if(NOT WEBVULKAN_DXC_WASM_JS OR WEBVULKAN_DXC_WASM_JS MATCHES "-NOTFOUND$")
   set(_webvulkan_dxc_wasm_hints
+    "${CMAKE_CURRENT_LIST_DIR}/../.3rdparty/dxc-wasm/dxc.js"
+    "${CMAKE_CURRENT_LIST_DIR}/../.3rdparty/dxc-wasm/dxc.mjs"
     "${CMAKE_CURRENT_LIST_DIR}/../tmp/dxc-wasm-build/bin/dxc.js"
     "${CMAKE_CURRENT_LIST_DIR}/../tmp/dxc-wasm-build/bin/dxc.mjs"
   )
