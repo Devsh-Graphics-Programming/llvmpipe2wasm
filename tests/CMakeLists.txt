@@ -297,9 +297,11 @@ add_custom_target(wasm_runtime_smoke DEPENDS "${WEBVULKAN_WASM_SMOKE_OK}")
 
 set(WEBVULKAN_LAVAPIPE_SMOKE_OK "${CMAKE_BINARY_DIR}/lavapipe_runtime_smoke.ok")
 set(WEBVULKAN_LAVAPIPE_SMOKE_JS "${CMAKE_BINARY_DIR}/lavapipe-smoke/lavapipe_runtime_smoke.js")
+set(WEBVULKAN_RUNTIME_REGISTRY_SOURCE "${CMAKE_CURRENT_LIST_DIR}/wasm/src/webvulkan_shader_runtime_registry.c")
 set(_webvulkan_lavapipe_depends
   "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
   "${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c"
+  "${WEBVULKAN_RUNTIME_REGISTRY_SOURCE}"
   "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs"
   "${WEBVULKAN_DXC_WASM_JS}"
   "${_webvulkan_volk_source}"
@@ -310,6 +312,10 @@ if(_webvulkan_test_mode STREQUAL "in-tree")
   list(APPEND _webvulkan_lavapipe_depends llvmpipe_wasm_spike)
 endif()
 list(JOIN _webvulkan_smoke_include_dirs "|" _webvulkan_smoke_include_dirs_serialized)
+set(_webvulkan_lavapipe_extra_sources
+  "${WEBVULKAN_RUNTIME_REGISTRY_SOURCE}"
+)
+list(JOIN _webvulkan_lavapipe_extra_sources "|" _webvulkan_lavapipe_extra_sources_serialized)
 
 add_custom_command(
   OUTPUT "${WEBVULKAN_LAVAPIPE_SMOKE_OK}"
@@ -318,6 +324,7 @@ add_custom_command(
     -DEMSDK_ROOT=${EMSDK_ROOT}
     -DDRIVER_ARCHIVE=${_webvulkan_driver_archive}
     -DSMOKE_INCLUDE_DIRS_SERIALIZED=${_webvulkan_smoke_include_dirs_serialized}
+    -DSMOKE_EXTRA_SOURCES_SERIALIZED=${_webvulkan_lavapipe_extra_sources_serialized}
     -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/lavapipe_runtime_smoke.c
     -DSMOKE_JS_OUT=${WEBVULKAN_LAVAPIPE_SMOKE_JS}
     -DSMOKE_EXPORT=_lavapipe_runtime_smoke
@@ -337,41 +344,6 @@ add_custom_command(
   VERBATIM
 )
 add_custom_target(lavapipe_runtime_smoke DEPENDS "${WEBVULKAN_LAVAPIPE_SMOKE_OK}")
-
-set(WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK "${CMAKE_BINARY_DIR}/poc_nir_to_wasm_smoke.ok")
-set(WEBVULKAN_POC_NIR_TO_WASM_SMOKE_JS "${CMAKE_BINARY_DIR}/lavapipe-smoke/poc_nir_to_wasm_smoke.js")
-set(_webvulkan_poc_nir_to_wasm_depends
-  "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
-  "${CMAKE_CURRENT_LIST_DIR}/wasm/src/poc_nir_to_wasm_smoke.c"
-  "${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs"
-  "${_webvulkan_volk_source}"
-  "${_webvulkan_volk_header}"
-  "${_webvulkan_driver_archive}"
-)
-if(_webvulkan_test_mode STREQUAL "in-tree")
-  list(APPEND _webvulkan_poc_nir_to_wasm_depends llvmpipe_wasm_spike)
-endif()
-add_custom_command(
-  OUTPUT "${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK}"
-  COMMAND
-    "${CMAKE_COMMAND}"
-    -DEMSDK_ROOT=${EMSDK_ROOT}
-    -DDRIVER_ARCHIVE=${_webvulkan_driver_archive}
-    -DSMOKE_INCLUDE_DIRS_SERIALIZED=${_webvulkan_smoke_include_dirs_serialized}
-    -DSMOKE_SOURCE=${CMAKE_CURRENT_LIST_DIR}/wasm/src/poc_nir_to_wasm_smoke.c
-    -DSMOKE_JS_OUT=${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_JS}
-    -DSMOKE_EXPORT=_poc_nir_to_wasm_smoke
-    -DSMOKE_SCRIPT=${CMAKE_CURRENT_LIST_DIR}/wasm/tools/smoke_runtime.mjs
-    -DSMOKE_REQUIRE_RUNTIME_SPIRV=0
-    -DVOLK_INCLUDE_DIR=${_webvulkan_volk_include_dir}
-    -DVOLK_SOURCE=${_webvulkan_volk_source}
-    -P "${CMAKE_CURRENT_LIST_DIR}/RunLavapipeRuntimeSmoke.cmake"
-  COMMAND "${CMAKE_COMMAND}" -E touch "${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK}"
-  DEPENDS ${_webvulkan_poc_nir_to_wasm_depends}
-  USES_TERMINAL
-  VERBATIM
-)
-add_custom_target(smoke_poc_nir_to_wasm DEPENDS "${WEBVULKAN_POC_NIR_TO_WASM_SMOKE_OK}")
 
 set(WEBVULKAN_CLANG_WASM_SMOKE_OK "${CMAKE_BINARY_DIR}/clang_wasm_runtime_smoke.ok")
 add_custom_command(
