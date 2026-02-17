@@ -1,9 +1,12 @@
 #include <emscripten/emscripten.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <volk.h>
+
+#include "webvulkan_shader_runtime_registry.h"
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
 
@@ -27,30 +30,7 @@ static const uint32_t kSmokeComputeSpirv[] = {
   0x0000000bu, 0x0003003eu, 0x0000000eu, 0x0000000cu, 0x000100fdu, 0x00010038u
 };
 
-static uint8_t* g_runtime_shader_spirv = 0;
-static uint32_t g_runtime_shader_spirv_size = 0u;
-
-EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_shader_spirv(const uint8_t* bytes, uint32_t byteCount) {
-  if (!bytes || byteCount < 4u || (byteCount % 4u) != 0u) {
-    return -1;
-  }
-  if (bytes[0] != 0x03u || bytes[1] != 0x02u || bytes[2] != 0x23u || bytes[3] != 0x07u) {
-    return -2;
-  }
-
-  uint8_t* copy = (uint8_t*)malloc(byteCount);
-  if (!copy) {
-    return -3;
-  }
-  memcpy(copy, bytes, byteCount);
-
-  if (g_runtime_shader_spirv) {
-    free(g_runtime_shader_spirv);
-  }
-  g_runtime_shader_spirv = copy;
-  g_runtime_shader_spirv_size = byteCount;
-  return 0;
-}
+static const uint32_t kEmbeddedExpectedDispatchValue = 0x12345678u;
 
 static int string_contains(const char* haystack, const char* needle) {
   return haystack && needle && strstr(haystack, needle) != 0;
@@ -139,6 +119,9 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   VkFence submitFence = VK_NULL_HANDLE;
   VkQueue queue = VK_NULL_HANDLE;
   uint32_t dispatchObservedValue = 0u;
+  uint32_t expectedDispatchValue = kEmbeddedExpectedDispatchValue;
+  uint32_t shaderKeyLo = webvulkan_get_runtime_active_shader_key_lo();
+  uint32_t shaderKeyHi = webvulkan_get_runtime_active_shader_key_hi();
   const uint32_t* shaderCodeWords = kSmokeComputeSpirv;
   size_t shaderCodeSizeBytes = sizeof(kSmokeComputeSpirv);
   const char* shaderSource = "embedded_static_spirv";
@@ -181,6 +164,7 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
 
 
   volkInitializeCustom((PFN_vkGetInstanceProcAddr)vk_icdGetInstanceProcAddr);
+  webvulkan_runtime_mark_wasm_usage(0, "none");
   if (!vkCreateInstance || !vkEnumerateInstanceVersion) {
     smokeRc = 21;
     goto cleanup;
@@ -427,11 +411,32 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
     goto cleanup;
   }
 
-  if (g_runtime_shader_spirv && g_runtime_shader_spirv_size >= 4u && (g_runtime_shader_spirv_size % 4u) == 0u) {
-    shaderCodeWords = (const uint32_t*)g_runtime_shader_spirv;
-    shaderCodeSizeBytes = (size_t)g_runtime_shader_spirv_size;
-    shaderSource = "runtime_injected_spirv";
-    shaderEntryPoint = "write_const";
+  const uint8_t* runtimeSpirvBytes = 0;
+  uint32_t runtimeSpirvSize = 0u;
+  const char* runtimeSpirvEntrypoint = 0;
+  if (webvulkan_runtime_lookup_spirv_module(
+        shaderKeyLo,
+        shaderKeyHi,
+        &runtimeSpirvBytes,
+        &runtimeSpirvSize,
+        &runtimeSpirvEntrypoint
+      ) &&
+      runtimeSpirvBytes &&
+      runtimeSpirvSize >= 4u &&
+      (runtimeSpirvSize % 4u) == 0u) {
+    shaderCodeWords = (const uint32_t*)runtimeSpirvBytes;
+    shaderCodeSizeBytes = (size_t)runtimeSpirvSize;
+    shaderSource = "runtime_registry_spirv";
+    if (runtimeSpirvEntrypoint && runtimeSpirvEntrypoint[0]) {
+      shaderEntryPoint = runtimeSpirvEntrypoint;
+    }
+    if (!webvulkan_runtime_lookup_expected_dispatch_value(
+          shaderKeyLo,
+          shaderKeyHi,
+          &expectedDispatchValue
+        )) {
+      expectedDispatchValue = shaderKeyLo;
+    }
   }
 
   VkShaderModuleCreateInfo shaderCreateInfo;
@@ -696,9 +701,9 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   }
 
   dispatchObservedValue = mappedStorageWord[0];
-  if (dispatchObservedValue != 0x12345678u) {
+  if (dispatchObservedValue != expectedDispatchValue) {
     printf("lavapipe runtime smoke dispatch mismatch\n");
-    printf("  shader.dispatch.expected=0x%08x\n", 0x12345678u);
+    printf("  shader.dispatch.expected=0x%08x\n", expectedDispatchValue);
     printf("  shader.dispatch.observed=0x%08x\n", dispatchObservedValue);
     smokeRc = 73;
     goto cleanup;
@@ -725,13 +730,14 @@ EMSCRIPTEN_KEEPALIVE int lavapipe_runtime_smoke(void) {
   printf("  proof.device_name_contains_llvmpipe=%s\n", proofDeviceName ? "yes" : "no");
   printf("  proof.driver_name_contains_llvmpipe=%s\n", proofDriverName ? "yes" : "no");
   printf("  vulkan_loader=volk (custom vk_icdGetInstanceProcAddr)\n");
+  printf("  shader.key=0x%08x%08x\n", shaderKeyHi, shaderKeyLo);
   printf("  shader.source=%s\n", shaderSource);
   printf("  shader.entrypoint=%s\n", shaderEntryPoint);
   printf("  shader.code_bytes=%u\n", (unsigned)shaderCodeSizeBytes);
   printf("  shader.create_module=ok\n");
   printf("  shader.create_compute_pipeline=ok\n");
   printf("  shader.dispatch=ok\n");
-  printf("  shader.dispatch.expected=0x%08x\n", 0x12345678u);
+  printf("  shader.dispatch.expected=0x%08x\n", expectedDispatchValue);
   printf("  shader.dispatch.observed=0x%08x\n", dispatchObservedValue);
 
 cleanup:

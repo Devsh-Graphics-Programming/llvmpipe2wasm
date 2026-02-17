@@ -56,7 +56,7 @@ Why not LLVM JIT-in-Wasm right now:
 
 Why not full NIR->Wasm backend today:
 - Mesa does not ship a complete NIR->Wasm backend for this use case.
-- We built a simple proof-of-concept for a minimal pattern, but a full backend from scratch is a large compiler project and not realistic for a single maintainer effort.
+- A full backend from scratch is a large compiler project and not realistic for a single maintainer effort.
 
 Current strategy:
 - Keep `clang_wasm_runtime_smoke` as a clang-in-wasm toolchain proof path.
@@ -154,13 +154,10 @@ It validates:
 
 This gives a realistic loader flow for consumers that use Volk, while keeping dispatch pinned to the wasm ICD path.
 
-`smoke_poc_nir_to_wasm` is kept as an experimental proof-of-concept path and is not the main production direction.
-
 Current shader-path split:
 - `lavapipe_runtime_smoke` injects runtime-generated SPIR-V (from Wasmer `clspv` by default) into the smoke module and validates Vulkan compute dispatch in the Mesa wasm driver.
 - `clang_wasm_runtime_smoke` validates the clang-in-wasm toolchain path and runs an SPIR-V probe through a Wasmer runtime command (`clspv` package entrypoint by default).
 - If that command is unavailable, smoke falls back to a direct `--target=spirv32` probe and reports the provider and failure reason.
-- `smoke_poc_nir_to_wasm` is a separate experimental check and is not part of `runtime_smoke`.
 
 ## Release channels
 

@@ -3,4 +3,5 @@
 /package*/
 /.3rdparty/
 /out/
+/tmp/
 .DS_Store
