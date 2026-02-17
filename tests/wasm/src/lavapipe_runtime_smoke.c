@@ -6,16 +6,16 @@
 #include <string.h>
 #include <volk.h>
 
-#include "webvulkan_shader_runtime_registry.h"
+#include "webvulkan/webvulkan_shader_runtime_registry.h"
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
 static double g_last_dispatch_wall_ms = -1.0;
 static const uint32_t kSmokeBufferWordCount = 65536u;
 
 enum {
-  WEBVULKAN_RUNTIME_BENCH_PROFILE_MICRO = 0u,
-  WEBVULKAN_RUNTIME_BENCH_PROFILE_REALISTIC = 1u,
-  WEBVULKAN_RUNTIME_BENCH_PROFILE_HOT_LOOP_SINGLE_DISPATCH = 2u,
+  WEBVULKAN_RUNTIME_BENCH_PROFILE_DISPATCH_OVERHEAD = 0u,
+  WEBVULKAN_RUNTIME_BENCH_PROFILE_BALANCED_GRID = 1u,
+  WEBVULKAN_RUNTIME_BENCH_PROFILE_LARGE_GRID = 2u,
   WEBVULKAN_RUNTIME_BENCH_PROFILE_COUNT = 3u
 };
 
@@ -36,18 +36,18 @@ typedef struct WebVulkanRuntimeBenchProfile_t {
   uint32_t dispatchZ;
 } WebVulkanRuntimeBenchProfile;
 
-static uint32_t g_runtime_bench_profile = WEBVULKAN_RUNTIME_BENCH_PROFILE_MICRO;
+static uint32_t g_runtime_bench_profile = WEBVULKAN_RUNTIME_BENCH_PROFILE_DISPATCH_OVERHEAD;
 static const WebVulkanRuntimeBenchProfile g_runtime_bench_profiles[WEBVULKAN_RUNTIME_BENCH_PROFILE_COUNT] = {
-  { "micro", 1024u, 16u, 1u, 1u, 1u },
-  { "realistic", 64u, 8u, 4u, 1u, 1u },
-  { "hot_loop_single_dispatch", 1u, 512u, 256u, 1u, 1u }
+  { "dispatch_overhead", 1024u, 16u, 1u, 1u, 1u },
+  { "balanced_grid", 256u, 16u, 4u, 1u, 1u },
+  { "large_grid", 1u, 64u, 256u, 1u, 1u }
 };
 static uint32_t g_runtime_shader_workload = WEBVULKAN_RUNTIME_SHADER_WORKLOAD_WRITE_CONST;
 
 static const WebVulkanRuntimeBenchProfile* webvulkan_get_runtime_bench_profile_desc(void) {
   uint32_t profile = g_runtime_bench_profile;
   if (profile >= WEBVULKAN_RUNTIME_BENCH_PROFILE_COUNT) {
-    profile = WEBVULKAN_RUNTIME_BENCH_PROFILE_MICRO;
+    profile = WEBVULKAN_RUNTIME_BENCH_PROFILE_DISPATCH_OVERHEAD;
     g_runtime_bench_profile = profile;
   }
   return &g_runtime_bench_profiles[profile];
