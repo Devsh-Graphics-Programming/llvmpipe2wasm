@@ -26,6 +26,11 @@ set(WEBVULKAN_SPIRV_WASM_PACKAGE "lights0123/llvm-spir" CACHE STRING "Wasmer pac
 set(WEBVULKAN_SPIRV_WASM_ENTRYPOINT "clspv" CACHE STRING "Wasmer command used for SPIR-V probe in clang wasm smoke")
 set(WEBVULKAN_RUNTIME_BENCH_ITERATIONS "5" CACHE STRING "Timed dispatch iterations per lavapipe runtime mode smoke")
 set(WEBVULKAN_RUNTIME_WARMUP_ITERATIONS "1" CACHE STRING "Warmup dispatch iterations per lavapipe runtime mode smoke")
+option(
+  WEBVULKAN_ENABLE_EXPERIMENTAL_ATOMIC_WORKLOAD_SMOKE
+  "Enable experimental workload smoke targets that currently require unsupported LLVM interpreter intrinsics"
+  OFF
+)
 
 if(NOT COMMAND CPMAddPackage)
   if(NOT DEFINED WEBVULKAN_CPM_VERSION OR WEBVULKAN_CPM_VERSION STREQUAL "")
@@ -383,54 +388,60 @@ add_dependencies(lavapipe_runtime_smoke_hot_loop
   lavapipe_runtime_smoke_raw_llvm_ir_hot_loop
 )
 
-webvulkan_add_lavapipe_runtime_mode_smoke_target(
-  lavapipe_runtime_smoke_fast_wasm_atomic_single_counter
-  fast_wasm
-  hot_loop_single_dispatch
-  atomic_single_counter
-)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(
-  lavapipe_runtime_smoke_raw_llvm_ir_atomic_single_counter
-  raw_llvm_ir
-  hot_loop_single_dispatch
-  atomic_single_counter
-)
-
-webvulkan_add_lavapipe_runtime_mode_smoke_target(
-  lavapipe_runtime_smoke_fast_wasm_atomic_per_workgroup
-  fast_wasm
-  hot_loop_single_dispatch
-  atomic_per_workgroup
-)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(
-  lavapipe_runtime_smoke_raw_llvm_ir_atomic_per_workgroup
-  raw_llvm_ir
-  hot_loop_single_dispatch
-  atomic_per_workgroup
-)
-
-webvulkan_add_lavapipe_runtime_mode_smoke_target(
-  lavapipe_runtime_smoke_fast_wasm_no_race_unique_writes
-  fast_wasm
-  hot_loop_single_dispatch
-  no_race_unique_writes
-)
-webvulkan_add_lavapipe_runtime_mode_smoke_target(
-  lavapipe_runtime_smoke_raw_llvm_ir_no_race_unique_writes
-  raw_llvm_ir
-  hot_loop_single_dispatch
-  no_race_unique_writes
-)
-
 add_custom_target(lavapipe_runtime_smoke_shader_workloads)
 add_dependencies(lavapipe_runtime_smoke_shader_workloads
-  lavapipe_runtime_smoke_fast_wasm_atomic_single_counter
-  lavapipe_runtime_smoke_raw_llvm_ir_atomic_single_counter
-  lavapipe_runtime_smoke_fast_wasm_atomic_per_workgroup
-  lavapipe_runtime_smoke_raw_llvm_ir_atomic_per_workgroup
-  lavapipe_runtime_smoke_fast_wasm_no_race_unique_writes
-  lavapipe_runtime_smoke_raw_llvm_ir_no_race_unique_writes
+  lavapipe_runtime_smoke_fast_wasm_micro
+  lavapipe_runtime_smoke_raw_llvm_ir_micro
 )
+
+if(WEBVULKAN_ENABLE_EXPERIMENTAL_ATOMIC_WORKLOAD_SMOKE)
+  webvulkan_add_lavapipe_runtime_mode_smoke_target(
+    lavapipe_runtime_smoke_fast_wasm_no_race_unique_writes
+    fast_wasm
+    hot_loop_single_dispatch
+    no_race_unique_writes
+  )
+  webvulkan_add_lavapipe_runtime_mode_smoke_target(
+    lavapipe_runtime_smoke_raw_llvm_ir_no_race_unique_writes
+    raw_llvm_ir
+    hot_loop_single_dispatch
+    no_race_unique_writes
+  )
+  webvulkan_add_lavapipe_runtime_mode_smoke_target(
+    lavapipe_runtime_smoke_fast_wasm_atomic_single_counter
+    fast_wasm
+    hot_loop_single_dispatch
+    atomic_single_counter
+  )
+  webvulkan_add_lavapipe_runtime_mode_smoke_target(
+    lavapipe_runtime_smoke_raw_llvm_ir_atomic_single_counter
+    raw_llvm_ir
+    hot_loop_single_dispatch
+    atomic_single_counter
+  )
+
+  webvulkan_add_lavapipe_runtime_mode_smoke_target(
+    lavapipe_runtime_smoke_fast_wasm_atomic_per_workgroup
+    fast_wasm
+    hot_loop_single_dispatch
+    atomic_per_workgroup
+  )
+  webvulkan_add_lavapipe_runtime_mode_smoke_target(
+    lavapipe_runtime_smoke_raw_llvm_ir_atomic_per_workgroup
+    raw_llvm_ir
+    hot_loop_single_dispatch
+    atomic_per_workgroup
+  )
+
+  add_dependencies(lavapipe_runtime_smoke_shader_workloads
+    lavapipe_runtime_smoke_fast_wasm_no_race_unique_writes
+    lavapipe_runtime_smoke_raw_llvm_ir_no_race_unique_writes
+    lavapipe_runtime_smoke_fast_wasm_atomic_single_counter
+    lavapipe_runtime_smoke_raw_llvm_ir_atomic_single_counter
+    lavapipe_runtime_smoke_fast_wasm_atomic_per_workgroup
+    lavapipe_runtime_smoke_raw_llvm_ir_atomic_per_workgroup
+  )
+endif()
 
 add_custom_target(lavapipe_runtime_smoke)
 add_dependencies(lavapipe_runtime_smoke lavapipe_runtime_smoke_fast_wasm lavapipe_runtime_smoke_raw_llvm_ir)

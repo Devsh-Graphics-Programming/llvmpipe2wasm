@@ -47,12 +47,82 @@ function runtimeShaderThreadgroupSizeX(workloadName) {
   return workloadName === "write_const" ? 1 : 64;
 }
 
-async function compileRuntimeSpirv(storeValue, workloadName) {
-  const storeConst = `0x${(storeValue >>> 0).toString(16)}u`;
-  const threadgroupSizeX = runtimeShaderThreadgroupSizeX(workloadName);
-  const dxcWasmJs = process.env.WEBVULKAN_DXC_WASM_JS || "";
-  if (dxcWasmJs) {
-    const hlslSource = `
+function runtimeBenchProfileDescriptor(profileName) {
+  switch (profileName) {
+    case "micro":
+      return { dispatchesPerSubmit: 1024, dispatchX: 1, dispatchY: 1, dispatchZ: 1 };
+    case "realistic":
+      return { dispatchesPerSubmit: 64, dispatchX: 4, dispatchY: 1, dispatchZ: 1 };
+    case "hot_loop_single_dispatch":
+      return { dispatchesPerSubmit: 1, dispatchX: 256, dispatchY: 1, dispatchZ: 1 };
+    default:
+      throw new Error(`Unsupported runtime bench profile '${profileName}'`);
+  }
+}
+
+function runtimeShaderEntrypoint(workloadName) {
+  switch (workloadName) {
+    case "atomic_single_counter":
+      return "atomic_single_counter";
+    case "atomic_per_workgroup":
+      return "atomic_per_workgroup";
+    case "no_race_unique_writes":
+      return "no_race_unique_writes";
+    case "write_const":
+      return "write_const";
+    default:
+      throw new Error(`Unsupported runtime shader workload '${workloadName}'`);
+  }
+}
+
+function runtimeShaderHlslSource(
+  storeConst,
+  threadgroupSizeX,
+  workloadName,
+  dispatchInvocationsPerSubmit,
+  dispatchWorkgroupsPerSubmit
+) {
+  const entrypoint = runtimeShaderEntrypoint(workloadName);
+  if (workloadName === "atomic_single_counter") {
+    return `
+RWStructuredBuffer<uint> OutBuf : register(u0);
+
+[numthreads(${threadgroupSizeX}, 1, 1)]
+void ${entrypoint}(uint3 tid : SV_DispatchThreadID) {
+  InterlockedAdd(OutBuf[0], 1u);
+}
+`;
+  }
+
+  if (workloadName === "atomic_per_workgroup") {
+    return `
+RWStructuredBuffer<uint> OutBuf : register(u0);
+
+[numthreads(${threadgroupSizeX}, 1, 1)]
+void ${entrypoint}(uint3 groupThreadId : SV_GroupThreadID) {
+  if (groupThreadId.x == 0u) {
+    InterlockedAdd(OutBuf[0], 1u);
+  }
+}
+`;
+  }
+
+  if (workloadName === "no_race_unique_writes") {
+    return `
+RWStructuredBuffer<uint> OutBuf : register(u0);
+
+[numthreads(${threadgroupSizeX}, 1, 1)]
+void ${entrypoint}(uint3 tid : SV_DispatchThreadID) {
+  if (tid.x == 0u && tid.y == 0u && tid.z == 0u) {
+    OutBuf[0] = ${dispatchInvocationsPerSubmit}u;
+  }
+  uint idx = tid.x;
+  OutBuf[1u + idx] = idx + 1u;
+}
+`;
+  }
+
+  return `
 RWStructuredBuffer<uint> OutBuf : register(u0);
 
 uint webvulkan_mix_const(uint v, uint salt) {
@@ -72,7 +142,7 @@ uint webvulkan_compile_time_chain() {
 }
 
 [numthreads(${threadgroupSizeX}, 1, 1)]
-void write_const(uint3 tid : SV_DispatchThreadID) {
+void ${entrypoint}(uint3 tid : SV_DispatchThreadID) {
   uint folded = webvulkan_compile_time_chain();
   if (folded == 0xdeadbeefu) {
     OutBuf[1] = folded;
@@ -80,6 +150,28 @@ void write_const(uint3 tid : SV_DispatchThreadID) {
   OutBuf[0] = ${storeConst};
 }
 `;
+}
+
+async function compileRuntimeSpirv(storeValue, workloadName) {
+  const storeConst = `0x${(storeValue >>> 0).toString(16)}u`;
+  const threadgroupSizeX = runtimeShaderThreadgroupSizeX(workloadName);
+  const shaderEntrypoint = runtimeShaderEntrypoint(workloadName);
+  const profile = runtimeBenchProfileDescriptor(runtimeBenchProfile);
+  const dispatchWorkgroupsPerSubmit =
+    profile.dispatchesPerSubmit *
+    profile.dispatchX *
+    profile.dispatchY *
+    profile.dispatchZ;
+  const dispatchInvocationsPerSubmit = dispatchWorkgroupsPerSubmit * threadgroupSizeX;
+  const dxcWasmJs = process.env.WEBVULKAN_DXC_WASM_JS || "";
+  if (dxcWasmJs) {
+    const hlslSource = runtimeShaderHlslSource(
+      storeConst,
+      threadgroupSizeX,
+      workloadName,
+      dispatchInvocationsPerSubmit,
+      dispatchWorkgroupsPerSubmit
+    );
 
     const scratchDir = await mkdtemp(join(tmpdir(), "webvulkan-dxc-wasm-"));
     const inputFile = "runtime_smoke.hlsl";
@@ -94,7 +186,7 @@ void write_const(uint3 tid : SV_DispatchThreadID) {
       "-T",
       "cs_6_0",
       "-E",
-      "write_const",
+      shaderEntrypoint,
       "-Fo",
       outputFile,
       inputFile
@@ -117,8 +209,12 @@ void write_const(uint3 tid : SV_DispatchThreadID) {
     return {
       provider: `dxc-wasm:${dxcWasmJs}`,
       bytes,
-      entrypoint: "write_const"
+      entrypoint: shaderEntrypoint
     };
+  }
+
+  if (workloadName !== "write_const") {
+    throw new Error(`Workload '${workloadName}' requires WEBVULKAN_DXC_WASM_JS`);
   }
 
   const wasmerBin = process.env.WEBVULKAN_WASMER_BIN;
@@ -146,7 +242,7 @@ uint webvulkan_compile_time_chain() {
 }
 
 __attribute__((reqd_work_group_size(${threadgroupSizeX}, 1, 1)))
-__kernel void write_const(__global uint* out) {
+__kernel void ${shaderEntrypoint}(__global uint* out) {
   uint folded = webvulkan_compile_time_chain();
   if (folded == (uint)0xdeadbeefu) {
     out[1] = folded;
@@ -200,7 +296,7 @@ __kernel void write_const(__global uint* out) {
       return {
         provider: attempt.provider,
         bytes: result.stdout,
-        entrypoint: "write_const"
+        entrypoint: shaderEntrypoint
       };
     }
 
@@ -519,7 +615,14 @@ async function runFastWasmSmoke(shaderValue) {
   console.log(`  runtime_wasm.bytes=${runtimeWasm.bytes.length}`);
 
   console.log("runtime smoke discover_key");
-  invokeSmokeOnce();
+  if (runtimeShaderWorkload === "write_const") {
+    invokeSmokeOnce();
+  } else {
+    const discoverRc = smokeFn();
+    if (discoverRc !== 0) {
+      console.log(`runtime smoke discover_key observed_nonzero_rc=${discoverRc} before runtime module registration`);
+    }
+  }
 
   const hasCapturedKey = runtime.ccall("webvulkan_runtime_has_captured_shader_key", "number", [], []) !== 0;
   if (!hasCapturedKey) {
@@ -576,6 +679,9 @@ async function runFastWasmSmoke(shaderValue) {
 }
 
 async function runRawLlvmIrSmoke(shaderValue) {
+  if (runtimeShaderWorkload !== "write_const") {
+    throw new Error(`raw_llvm_ir mode currently supports only write_const workload, got '${runtimeShaderWorkload}'`);
+  }
   const spirv = await compileRuntimeSpirv(shaderValue, runtimeShaderWorkload);
   setRuntimeBenchProfile(runtimeBenchProfileValue);
   setRuntimeShaderWorkload(runtimeShaderWorkloadValue);
