@@ -93,6 +93,17 @@ jobs:
           ccache --zero-stats
           ccache --show-stats
 
+      - name: Resolve DXC prebuilt checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          dxc_sha="$(curl -L --fail "${DXC_WASM_PREBUILT_URL}.sha256" | awk 'NR==1 {print $1}')"
+          if [ -z "${dxc_sha}" ]; then
+            echo "Failed to resolve DXC prebuilt checksum from release sidecar file."
+            exit 1
+          fi
+          echo "DXC_WASM_PREBUILT_SHA256=${dxc_sha}" >> "${GITHUB_ENV}"
+
       - name: Bootstrap DXC Wasm prebuilt
         shell: bash
         run: |
@@ -100,14 +111,21 @@ jobs:
           dxc_dir="${GITHUB_WORKSPACE}/.3rdparty/dxc-wasm"
           dxc_js="${dxc_dir}/dxc.js"
           dxc_wasm="${dxc_dir}/dxc.wasm"
+          dxc_sha_stamp="${dxc_dir}/.sha256"
+          download_dxc=0
           if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
+            download_dxc=1
+          elif [ ! -f "${dxc_sha_stamp}" ] || [ "$(cat "${dxc_sha_stamp}")" != "${DXC_WASM_PREBUILT_SHA256}" ]; then
+            download_dxc=1
+          fi
+          if [ "${download_dxc}" -eq 1 ]; then
             mkdir -p "${dxc_dir}"
+            rm -f "${dxc_js}" "${dxc_wasm}" "${dxc_sha_stamp}"
             curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
-            if [ -n "${DXC_WASM_PREBUILT_SHA256}" ]; then
-              echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
-            fi
+            echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
             python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
               "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
+            printf '%s' "${DXC_WASM_PREBUILT_SHA256}" > "${dxc_sha_stamp}"
           fi
           test -f "${dxc_js}"
           test -f "${dxc_wasm}"

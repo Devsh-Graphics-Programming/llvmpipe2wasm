@@ -46,6 +46,19 @@ jobs:
           python3 -m pip install meson mako
           python3 -m pip install cmake==4.2.0
 
+      - name: Resolve prebuilt bundle checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm_sha="$(curl -L --fail "${LLVM_PREBUILT_URL}.sha256" | awk 'NR==1 {print $1}')"
+          dxc_sha="$(curl -L --fail "${DXC_WASM_PREBUILT_URL}.sha256" | awk 'NR==1 {print $1}')"
+          if [ -z "${llvm_sha}" ] || [ -z "${dxc_sha}" ]; then
+            echo "Failed to resolve prebuilt checksums from release sidecar files."
+            exit 1
+          fi
+          echo "LLVM_PREBUILT_SHA256=${llvm_sha}" >> "${GITHUB_ENV}"
+          echo "DXC_WASM_PREBUILT_SHA256=${dxc_sha}" >> "${GITHUB_ENV}"
+
       - name: Restore third-party cache
         id: cache_thirdparty
         uses: actions/cache/restore@v4
@@ -74,14 +87,21 @@ jobs:
           dxc_dir="${GITHUB_WORKSPACE}/.3rdparty/dxc-wasm"
           dxc_js="${dxc_dir}/dxc.js"
           dxc_wasm="${dxc_dir}/dxc.wasm"
+          dxc_sha_stamp="${dxc_dir}/.sha256"
+          download_dxc=0
           if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
+            download_dxc=1
+          elif [ ! -f "${dxc_sha_stamp}" ] || [ "$(cat "${dxc_sha_stamp}")" != "${DXC_WASM_PREBUILT_SHA256}" ]; then
+            download_dxc=1
+          fi
+          if [ "${download_dxc}" -eq 1 ]; then
             mkdir -p "${dxc_dir}"
+            rm -f "${dxc_js}" "${dxc_wasm}" "${dxc_sha_stamp}"
             curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
-            if [ -n "${DXC_WASM_PREBUILT_SHA256}" ]; then
-              echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
-            fi
+            echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
             python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
               "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
+            printf '%s' "${DXC_WASM_PREBUILT_SHA256}" > "${dxc_sha_stamp}"
           fi
           test -f "${dxc_js}"
           test -f "${dxc_wasm}"
@@ -158,6 +178,19 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==4.2.0
 
+      - name: Resolve prebuilt bundle checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm_sha="$(curl -L --fail "${LLVM_PREBUILT_URL}.sha256" | awk 'NR==1 {print $1}')"
+          dxc_sha="$(curl -L --fail "${DXC_WASM_PREBUILT_URL}.sha256" | awk 'NR==1 {print $1}')"
+          if [ -z "${llvm_sha}" ] || [ -z "${dxc_sha}" ]; then
+            echo "Failed to resolve prebuilt checksums from release sidecar files."
+            exit 1
+          fi
+          echo "LLVM_PREBUILT_SHA256=${llvm_sha}" >> "${GITHUB_ENV}"
+          echo "DXC_WASM_PREBUILT_SHA256=${dxc_sha}" >> "${GITHUB_ENV}"
+
       - name: Restore third-party cache
         id: cache_thirdparty
         uses: actions/cache/restore@v4
@@ -189,14 +222,21 @@ jobs:
           dxc_dir="${GITHUB_WORKSPACE}/.3rdparty/dxc-wasm"
           dxc_js="${dxc_dir}/dxc.js"
           dxc_wasm="${dxc_dir}/dxc.wasm"
+          dxc_sha_stamp="${dxc_dir}/.sha256"
+          download_dxc=0
           if [ ! -f "${dxc_js}" ] || [ ! -f "${dxc_wasm}" ]; then
+            download_dxc=1
+          elif [ ! -f "${dxc_sha_stamp}" ] || [ "$(cat "${dxc_sha_stamp}")" != "${DXC_WASM_PREBUILT_SHA256}" ]; then
+            download_dxc=1
+          fi
+          if [ "${download_dxc}" -eq 1 ]; then
             mkdir -p "${dxc_dir}"
+            rm -f "${dxc_js}" "${dxc_wasm}" "${dxc_sha_stamp}"
             curl -L --fail "${DXC_WASM_PREBUILT_URL}" -o "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip"
-            if [ -n "${DXC_WASM_PREBUILT_SHA256}" ]; then
-              echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
-            fi
+            echo "${DXC_WASM_PREBUILT_SHA256}  ${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" | sha256sum -c -
             python3 -c "import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
               "${RUNNER_TEMP}/dxc-wasm-prebuilt.zip" "${dxc_dir}"
+            printf '%s' "${DXC_WASM_PREBUILT_SHA256}" > "${dxc_sha_stamp}"
           fi
           test -f "${dxc_js}"
           test -f "${dxc_wasm}"
