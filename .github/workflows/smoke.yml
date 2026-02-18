@@ -22,6 +22,8 @@ env:
   BUILD_TYPE: Release
   CMAKE_GENERATOR: Ninja
   WEBVULKAN_CACHE_VERSION: v3
+  WEBVULKAN_BENCH_REQUIRED_PROFILES: dispatch_overhead,balanced_grid
+  WEBVULKAN_BENCH_MIN_SPEEDUP: "2.0"
   LLVM_PREBUILT_URL: ${{ vars.WEBVULKAN_LLVM_PREBUILT_URL || 'https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/llvm-wasm-prebuilt-latest/llvm-wasm-install.zip' }}
   LLVM_PREBUILT_SHA256: ${{ vars.WEBVULKAN_LLVM_PREBUILT_SHA256 || '' }}
   DXC_WASM_PREBUILT_URL: ${{ vars.WEBVULKAN_DXC_WASM_PREBUILT_URL || 'https://github.com/Devsh-Graphics-Programming/llvmpipe2wasm/releases/download/dxc-wasm-prebuilt-latest/dxc-wasm-prebuilt.zip' }}
@@ -119,8 +121,17 @@ jobs:
             -DLLVM_PREBUILT_SHA256="${LLVM_PREBUILT_SHA256}"
 
       - name: Build and run in-tree smoke
+        shell: bash
         run: |
-          cmake --build build --target runtime_smoke --config "${BUILD_TYPE}"
+          set -euo pipefail
+          cmake --build build --target runtime_smoke --config "${BUILD_TYPE}" 2>&1 | tee build/runtime_smoke.log
+
+      - name: Validate in-tree runtime benchmark gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="$(ls -1d "${GITHUB_WORKSPACE}/.3rdparty/emsdk"/node/*/bin/node | sort -V | tail -n1)"
+          "${node_bin}" tests/wasm/tools/validate_dispatch_bench.mjs build/runtime_smoke.log
 
       - name: Build and run extended in-tree smoke
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_smoke }}
@@ -253,5 +264,14 @@ jobs:
             -DWEBVULKAN_EMSCRIPTEN_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.3rdparty/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
 
       - name: Build and run package smoke
+        shell: bash
         run: |
-          cmake --build tests-only/build --target runtime_smoke --config "${BUILD_TYPE}"
+          set -euo pipefail
+          cmake --build tests-only/build --target runtime_smoke --config "${BUILD_TYPE}" 2>&1 | tee tests-only/build/runtime_smoke.log
+
+      - name: Validate package runtime benchmark gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="$(ls -1d "${GITHUB_WORKSPACE}/.3rdparty/emsdk"/node/*/bin/node | sort -V | tail -n1)"
+          "${node_bin}" tests-only/tests/wasm/tools/validate_dispatch_bench.mjs tests-only/build/runtime_smoke.log

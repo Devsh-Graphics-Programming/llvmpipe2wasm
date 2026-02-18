@@ -230,6 +230,7 @@ The test validates
 6. Output correctness checks for the dispatched shader.
 7. Driver identity and provider checks to confirm the lavapipe wasm path.
 8. Timing comparison between both runtime modes on CI-validated dispatch profiles.
+9. Benchmark gate requiring `fast_wasm` to stay at least `2.0x` faster than `raw_llvm_ir` on CI default profiles.
 
 Runtime modes validated in CI
 
