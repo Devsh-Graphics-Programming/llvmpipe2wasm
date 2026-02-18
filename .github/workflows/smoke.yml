@@ -126,6 +126,17 @@ jobs:
           set -euo pipefail
           cmake --build build --target runtime_smoke --config "${BUILD_TYPE}" 2>&1 | tee build/runtime_smoke.log
 
+      - name: Report in-tree runtime benchmark JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="$(ls -1d "${GITHUB_WORKSPACE}/.3rdparty/emsdk"/node/*/bin/node | sort -V | tail -n1)"
+          "${node_bin}" tests/wasm/tools/validate_dispatch_bench.mjs \
+            build/runtime_smoke.log \
+            --emit-json \
+            --json-out build/runtime_benchmark_report.json \
+            --no-validate
+
       - name: Validate in-tree runtime benchmark gate
         shell: bash
         run: |
@@ -268,6 +279,17 @@ jobs:
         run: |
           set -euo pipefail
           cmake --build tests-only/build --target runtime_smoke --config "${BUILD_TYPE}" 2>&1 | tee tests-only/build/runtime_smoke.log
+
+      - name: Report package runtime benchmark JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="$(ls -1d "${GITHUB_WORKSPACE}/.3rdparty/emsdk"/node/*/bin/node | sort -V | tail -n1)"
+          "${node_bin}" tests-only/tests/wasm/tools/validate_dispatch_bench.mjs \
+            tests-only/build/runtime_smoke.log \
+            --emit-json \
+            --json-out tests-only/build/runtime_benchmark_report.json \
+            --no-validate
 
       - name: Validate package runtime benchmark gate
         shell: bash

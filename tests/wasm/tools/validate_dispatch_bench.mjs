@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 function parsePositiveFloat(value, label) {
   const parsed = Number.parseFloat(value);
@@ -89,9 +89,45 @@ function ensureModeEntries(mapByProfile, profileName, modeName) {
   return byMode.get(modeName);
 }
 
-const logPath = process.argv[2];
+let logPath = "";
+let emitJson = false;
+let jsonOutPath = "";
+let enforceThresholds = true;
+
+const args = process.argv.slice(2);
+for (let i = 0; i < args.length; ++i) {
+  const arg = args[i];
+  if (arg === "--emit-json") {
+    emitJson = true;
+    continue;
+  }
+  if (arg === "--no-validate") {
+    enforceThresholds = false;
+    continue;
+  }
+  if (arg === "--json-out") {
+    const nextValue = args[i + 1];
+    if (!nextValue) {
+      throw new Error("--json-out requires a file path");
+    }
+    jsonOutPath = nextValue;
+    i += 1;
+    continue;
+  }
+  if (arg.startsWith("--")) {
+    throw new Error(`Unknown option '${arg}'`);
+  }
+  if (!logPath) {
+    logPath = arg;
+    continue;
+  }
+  throw new Error("Only one runtime-smoke-log-path argument is supported");
+}
+
 if (!logPath) {
-  throw new Error("Usage: node validate_dispatch_bench.mjs <runtime-smoke-log-path>");
+  throw new Error(
+    "Usage: node validate_dispatch_bench.mjs <runtime-smoke-log-path> [--emit-json] [--json-out <path>] [--no-validate]"
+  );
 }
 
 const logText = await readFile(logPath, "utf8");
@@ -113,6 +149,7 @@ for (const summary of summaries) {
 }
 
 const requiredProfiles = normalizeRequiredProfiles();
+const reportProfiles = [];
 for (const profileName of requiredProfiles) {
   const fastSamples = ensureModeEntries(benchmarksByProfile, profileName, "fast_wasm");
   const rawSamples = ensureModeEntries(benchmarksByProfile, profileName, "raw_llvm_ir");
@@ -121,16 +158,59 @@ for (const profileName of requiredProfiles) {
   const rawAvgMs = average(rawSamples);
   const speedup = rawAvgMs / fastAvgMs;
   const minSpeedup = envThresholdForProfile(profileName);
+  const profilePass = speedup >= minSpeedup;
+
+  reportProfiles.push({
+    name: profileName,
+    fast_wasm_avg_ms: fastAvgMs,
+    raw_llvm_ir_avg_ms: rawAvgMs,
+    speedup_x: speedup,
+    required_min_speedup_x: minSpeedup,
+    pass: profilePass
+  });
 
   console.log(
     `[bench] profile=${profileName} fast_wasm_avg_ms=${fastAvgMs.toFixed(6)} raw_llvm_ir_avg_ms=${rawAvgMs.toFixed(6)} speedup=${speedup.toFixed(3)}x required>=${minSpeedup.toFixed(3)}x`
   );
 
-  if (speedup < minSpeedup) {
+  if (enforceThresholds && speedup < minSpeedup) {
     throw new Error(
       `Benchmark gate failed for profile='${profileName}': observed speedup ${speedup.toFixed(3)}x < required ${minSpeedup.toFixed(3)}x`
     );
   }
 }
 
-console.log("[bench] runtime benchmark gate passed");
+const speedupValues = reportProfiles.map((profile) => profile.speedup_x);
+const minSpeedupObserved = Math.min(...speedupValues);
+const maxSpeedupObserved = Math.max(...speedupValues);
+const avgSpeedupObserved = average(speedupValues);
+const geometricMeanSpeedupObserved = Math.exp(
+  speedupValues.reduce((sum, value) => sum + Math.log(value), 0.0) / speedupValues.length
+);
+
+const report = {
+  required_profiles: requiredProfiles,
+  profiles: reportProfiles,
+  summary: {
+    min_speedup_x: minSpeedupObserved,
+    max_speedup_x: maxSpeedupObserved,
+    avg_speedup_x: avgSpeedupObserved,
+    geomean_speedup_x: geometricMeanSpeedupObserved,
+    all_profiles_pass: reportProfiles.every((profile) => profile.pass)
+  }
+};
+
+if (jsonOutPath) {
+  await writeFile(jsonOutPath, JSON.stringify(report, null, 2) + "\n", "utf8");
+}
+
+if (emitJson) {
+  console.log("[bench] benchmark report json");
+  console.log(JSON.stringify(report, null, 2));
+}
+
+if (enforceThresholds) {
+  console.log("[bench] runtime benchmark gate passed");
+} else {
+  console.log("[bench] runtime benchmark report generated without threshold validation");
+}
