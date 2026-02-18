@@ -42,6 +42,8 @@ function firstLine(value) {
 
 const runtimeDefaultKeyLo = 0x12345678 >>> 0;
 const runtimeDefaultKeyHi = 0 >>> 0;
+const runtimeShaderBundleHasWasmFlag = 0x1 >>> 0;
+const runtimeShaderBundleHasExpectedValueFlag = 0x2 >>> 0;
 
 function runtimeShaderThreadgroupSizeX(workloadName) {
   return workloadName === "write_const" ? 1 : 64;
@@ -452,18 +454,6 @@ function summarizeDispatchTimings(mode, profile, samples) {
   console.log(`  max_ns_per_invocation=${maxNsPerInvocation.toFixed(3)}`);
 }
 
-function setRuntimeDispatchMode(modeValue) {
-  const setModeRc = runtime.ccall(
-    "webvulkan_set_runtime_dispatch_mode",
-    "number",
-    ["number"],
-    [modeValue]
-  );
-  if (setModeRc !== 0) {
-    throw new Error(`webvulkan_set_runtime_dispatch_mode failed with rc=${setModeRc}`);
-  }
-}
-
 function setRuntimeBenchProfile(profileValue) {
   const setProfileRc = runtime.ccall(
     "webvulkan_set_runtime_bench_profile",
@@ -488,40 +478,77 @@ function setRuntimeShaderWorkload(workloadValue) {
   }
 }
 
-function setActiveShaderKey(keyLo, keyHi) {
+function clearRuntimeShaderBundles() {
+  runtime.ccall("webvulkan_runtime_clear_shader_bundles", null, [], []);
+}
+
+function setRuntimeDispatchModeFastWasm(enabled) {
+  const setModeRc = runtime.ccall(
+    "webvulkan_runtime_set_dispatch_mode_fast_wasm",
+    "number",
+    ["number"],
+    [enabled ? 1 : 0]
+  );
+  if (setModeRc !== 0) {
+    throw new Error(`webvulkan_runtime_set_dispatch_mode_fast_wasm failed with rc=${setModeRc}`);
+  }
+}
+
+function setActiveShaderBundleKey(keyLo, keyHi) {
   const setKeyRc = runtime.ccall(
-    "webvulkan_set_runtime_active_shader_key",
+    "webvulkan_runtime_set_active_shader_bundle",
     "number",
     ["number", "number"],
     [keyLo, keyHi]
   );
   if (setKeyRc !== 0) {
-    throw new Error(`webvulkan_set_runtime_active_shader_key failed with rc=${setKeyRc}`);
+    throw new Error(`webvulkan_runtime_set_active_shader_bundle failed with rc=${setKeyRc}`);
   }
 }
 
-function registerExpectedDispatchValue(keyLo, keyHi, shaderValue) {
-  const setExpectedRc = runtime.ccall(
-    "webvulkan_set_runtime_expected_dispatch_value",
+function registerRuntimeShaderBundle(
+  keyLo,
+  keyHi,
+  spirv,
+  runtimeWasmModule,
+  expectedDispatchValue
+) {
+  const hasWasm = !!runtimeWasmModule;
+  const wasmBytes = hasWasm ? runtimeWasmModule.bytes : new Uint8Array(0);
+  const wasmEntrypoint = hasWasm ? runtimeWasmModule.entrypoint : "";
+  const wasmProvider = hasWasm ? runtimeWasmModule.provider : "";
+  let flags = runtimeShaderBundleHasExpectedValueFlag;
+  if (hasWasm) {
+    flags |= runtimeShaderBundleHasWasmFlag;
+  }
+
+  const registerBundleRc = runtime.ccall(
+    "webvulkan_runtime_register_shader_bundle_params",
     "number",
-    ["number", "number", "number"],
-    [keyLo, keyHi, shaderValue]
+    ["number", "number", "array", "number", "string", "array", "number", "string", "string", "number", "number"],
+    [
+      keyLo,
+      keyHi,
+      spirv.bytes,
+      spirv.bytes.length,
+      spirv.entrypoint,
+      wasmBytes,
+      wasmBytes.length,
+      wasmEntrypoint,
+      wasmProvider,
+      expectedDispatchValue >>> 0,
+      flags >>> 0
+    ]
   );
-  if (setExpectedRc !== 0) {
-    throw new Error(`webvulkan_set_runtime_expected_dispatch_value failed with rc=${setExpectedRc}`);
+  if (registerBundleRc !== 0) {
+    throw new Error(`webvulkan_runtime_register_shader_bundle_params failed with rc=${registerBundleRc}`);
   }
 }
 
-function registerSpirvForKey(keyLo, keyHi, spirv) {
-  const setSpirvRc = runtime.ccall(
-    "webvulkan_register_runtime_shader_spirv",
-    "number",
-    ["number", "number", "array", "number", "string"],
-    [keyLo, keyHi, spirv.bytes, spirv.bytes.length, spirv.entrypoint]
-  );
-  if (setSpirvRc !== 0) {
-    throw new Error(`webvulkan_register_runtime_shader_spirv failed with rc=${setSpirvRc}`);
-  }
+function getRuntimeRegisteredBundleCounts() {
+  const spirvCount = runtime.ccall("webvulkan_runtime_get_registered_spirv_count", "number", [], []) >>> 0;
+  const wasmCount = runtime.ccall("webvulkan_runtime_get_registered_wasm_count", "number", [], []) >>> 0;
+  return { spirvCount, wasmCount };
 }
 
 async function runFastWasmSmoke(shaderValue) {
@@ -529,12 +556,11 @@ async function runFastWasmSmoke(shaderValue) {
   const runtimeWasm = await compileRuntimeLlvmirToWasm();
   setRuntimeBenchProfile(runtimeBenchProfileValue);
   setRuntimeShaderWorkload(runtimeShaderWorkloadValue);
-  runtime.ccall("webvulkan_reset_runtime_shader_registry", null, [], []);
+  clearRuntimeShaderBundles();
   runtime.ccall("webvulkan_runtime_reset_captured_shader_key", null, [], []);
-  setRuntimeDispatchMode(1);
-  setActiveShaderKey(runtimeDefaultKeyLo, runtimeDefaultKeyHi);
-  registerSpirvForKey(runtimeDefaultKeyLo, runtimeDefaultKeyHi, spirv);
-  registerExpectedDispatchValue(runtimeDefaultKeyLo, runtimeDefaultKeyHi, shaderValue);
+  setRuntimeDispatchModeFastWasm(true);
+  setActiveShaderBundleKey(runtimeDefaultKeyLo, runtimeDefaultKeyHi);
+  registerRuntimeShaderBundle(runtimeDefaultKeyLo, runtimeDefaultKeyHi, spirv, null, shaderValue);
 
   console.log("runtime shader compile ok");
   console.log(`  mode=fast_wasm`);
@@ -547,6 +573,9 @@ async function runFastWasmSmoke(shaderValue) {
   console.log(`  runtime_wasm.provider=${runtimeWasm.provider}`);
   console.log(`  runtime_wasm.entrypoint=${runtimeWasm.entrypoint}`);
   console.log(`  runtime_wasm.bytes=${runtimeWasm.bytes.length}`);
+  const bootstrapCounts = getRuntimeRegisteredBundleCounts();
+  console.log(`  runtime_registry.bootstrap.spirv=${bootstrapCounts.spirvCount}`);
+  console.log(`  runtime_registry.bootstrap.wasm=${bootstrapCounts.wasmCount}`);
 
   console.log("runtime smoke discover_key");
   if (runtimeShaderWorkload === "write_const") {
@@ -565,26 +594,11 @@ async function runFastWasmSmoke(shaderValue) {
 
   const capturedKeyLo = runtime.ccall("webvulkan_runtime_get_captured_shader_key_lo", "number", [], []) >>> 0;
   const capturedKeyHi = runtime.ccall("webvulkan_runtime_get_captured_shader_key_hi", "number", [], []) >>> 0;
-  registerSpirvForKey(capturedKeyLo, capturedKeyHi, spirv);
-  const registerWasmRc = runtime.ccall(
-    "webvulkan_register_runtime_wasm_module",
-    "number",
-    ["number", "number", "array", "number", "string", "string"],
-    [
-      capturedKeyLo,
-      capturedKeyHi,
-      runtimeWasm.bytes,
-      runtimeWasm.bytes.length,
-      runtimeWasm.entrypoint,
-      runtimeWasm.provider
-    ]
-  );
-  if (registerWasmRc !== 0) {
-    throw new Error(`webvulkan_register_runtime_wasm_module failed with rc=${registerWasmRc}`);
-  }
-  registerExpectedDispatchValue(capturedKeyLo, capturedKeyHi, shaderValue);
-  setActiveShaderKey(capturedKeyLo, capturedKeyHi);
+  registerRuntimeShaderBundle(capturedKeyLo, capturedKeyHi, spirv, runtimeWasm, shaderValue);
+  setActiveShaderBundleKey(capturedKeyLo, capturedKeyHi);
   console.log(`runtime shader key captured=0x${capturedKeyHi.toString(16).padStart(8, "0")}${capturedKeyLo.toString(16).padStart(8, "0")}`);
+  const capturedCounts = getRuntimeRegisteredBundleCounts();
+  console.log(`runtime registry counts spirv=${capturedCounts.spirvCount} wasm=${capturedCounts.wasmCount}`);
 
   for (let i = 0; i < runtimeWarmupIterations; ++i) {
     console.log(`runtime smoke warmup mode=fast_wasm run=${i + 1}/${runtimeWarmupIterations}`);
@@ -619,12 +633,11 @@ async function runRawLlvmIrSmoke(shaderValue) {
   const spirv = await compileRuntimeSpirv(shaderValue, runtimeShaderWorkload);
   setRuntimeBenchProfile(runtimeBenchProfileValue);
   setRuntimeShaderWorkload(runtimeShaderWorkloadValue);
-  runtime.ccall("webvulkan_reset_runtime_shader_registry", null, [], []);
+  clearRuntimeShaderBundles();
   runtime.ccall("webvulkan_runtime_reset_captured_shader_key", null, [], []);
-  setRuntimeDispatchMode(0);
-  setActiveShaderKey(runtimeDefaultKeyLo, runtimeDefaultKeyHi);
-  registerSpirvForKey(runtimeDefaultKeyLo, runtimeDefaultKeyHi, spirv);
-  registerExpectedDispatchValue(runtimeDefaultKeyLo, runtimeDefaultKeyHi, shaderValue);
+  setRuntimeDispatchModeFastWasm(false);
+  setActiveShaderBundleKey(runtimeDefaultKeyLo, runtimeDefaultKeyHi);
+  registerRuntimeShaderBundle(runtimeDefaultKeyLo, runtimeDefaultKeyHi, spirv, null, shaderValue);
 
   console.log("runtime shader compile ok");
   console.log(`  mode=raw_llvm_ir`);
@@ -634,6 +647,9 @@ async function runRawLlvmIrSmoke(shaderValue) {
   console.log(`  spirv.provider=${spirv.provider}`);
   console.log(`  spirv.bytes=${spirv.bytes.length}`);
   console.log(`  spirv.entrypoint=${spirv.entrypoint}`);
+  const bootstrapCounts = getRuntimeRegisteredBundleCounts();
+  console.log(`  runtime_registry.bootstrap.spirv=${bootstrapCounts.spirvCount}`);
+  console.log(`  runtime_registry.bootstrap.wasm=${bootstrapCounts.wasmCount}`);
 
   console.log("runtime smoke discover_key");
   invokeSmokeOnce();
@@ -645,10 +661,11 @@ async function runRawLlvmIrSmoke(shaderValue) {
 
   const capturedKeyLo = runtime.ccall("webvulkan_runtime_get_captured_shader_key_lo", "number", [], []) >>> 0;
   const capturedKeyHi = runtime.ccall("webvulkan_runtime_get_captured_shader_key_hi", "number", [], []) >>> 0;
-  registerSpirvForKey(capturedKeyLo, capturedKeyHi, spirv);
-  registerExpectedDispatchValue(capturedKeyLo, capturedKeyHi, shaderValue);
-  setActiveShaderKey(capturedKeyLo, capturedKeyHi);
+  registerRuntimeShaderBundle(capturedKeyLo, capturedKeyHi, spirv, null, shaderValue);
+  setActiveShaderBundleKey(capturedKeyLo, capturedKeyHi);
   console.log(`runtime shader key captured=0x${capturedKeyHi.toString(16).padStart(8, "0")}${capturedKeyLo.toString(16).padStart(8, "0")}`);
+  const capturedCounts = getRuntimeRegisteredBundleCounts();
+  console.log(`runtime registry counts spirv=${capturedCounts.spirvCount} wasm=${capturedCounts.wasmCount}`);
 
   for (let i = 0; i < runtimeWarmupIterations; ++i) {
     console.log(`runtime smoke warmup mode=raw_llvm_ir run=${i + 1}/${runtimeWarmupIterations}`);

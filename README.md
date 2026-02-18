@@ -216,6 +216,17 @@ target_link_libraries(my_app PRIVATE webvulkan::llvmpipe_wasm)
 
 In package mode the same helper is available after `find_package(WebVulkanLlvmpipeWasm REQUIRED CONFIG)`.
 
+Runtime registry API for real usage
+
+- `webvulkan_runtime_register_shader_bundle(...)` registers one shader bundle via struct.
+- `webvulkan_runtime_register_shader_bundles(...)` registers many bundles in one call.
+- `webvulkan_runtime_register_shader_bundle_params(...)` is a flat convenience API.
+- `webvulkan_runtime_unregister_shader_bundle(...)` removes one shader key.
+- `webvulkan_runtime_clear_shader_bundles()` clears all registered runtime bundles.
+- `webvulkan_runtime_set_active_shader_bundle(...)` selects active shader key.
+- `webvulkan_runtime_set_dispatch_mode_fast_wasm(...)` toggles fast wasm path on or off.
+- `webvulkan_runtime_get_registered_spirv_count()` and `webvulkan_runtime_get_registered_wasm_count()` expose current registry counts.
+
 ## How we validate it
 
 We run `runtime_smoke` in CI as the runtime validation test.

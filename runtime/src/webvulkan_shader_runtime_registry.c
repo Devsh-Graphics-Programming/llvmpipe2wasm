@@ -94,6 +94,42 @@ static int webvulkan_find_wasm_entry_index(uint32_t keyLo, uint32_t keyHi) {
   return -1;
 }
 
+static void webvulkan_remove_spirv_entry_at(uint32_t index) {
+  if (index >= g_runtime_spirv_count) {
+    return;
+  }
+  WebVulkanRuntimeSpirvEntry* entry = &g_runtime_spirv_entries[index];
+  if (entry->bytes) {
+    free(entry->bytes);
+    entry->bytes = 0;
+  }
+  for (uint32_t i = index + 1u; i < g_runtime_spirv_count; ++i) {
+    g_runtime_spirv_entries[i - 1u] = g_runtime_spirv_entries[i];
+  }
+  if (g_runtime_spirv_count > 0u) {
+    --g_runtime_spirv_count;
+    memset(&g_runtime_spirv_entries[g_runtime_spirv_count], 0, sizeof(g_runtime_spirv_entries[0]));
+  }
+}
+
+static void webvulkan_remove_wasm_entry_at(uint32_t index) {
+  if (index >= g_runtime_wasm_count) {
+    return;
+  }
+  WebVulkanRuntimeWasmEntry* entry = &g_runtime_wasm_entries[index];
+  if (entry->bytes) {
+    free(entry->bytes);
+    entry->bytes = 0;
+  }
+  for (uint32_t i = index + 1u; i < g_runtime_wasm_count; ++i) {
+    g_runtime_wasm_entries[i - 1u] = g_runtime_wasm_entries[i];
+  }
+  if (g_runtime_wasm_count > 0u) {
+    --g_runtime_wasm_count;
+    memset(&g_runtime_wasm_entries[g_runtime_wasm_count], 0, sizeof(g_runtime_wasm_entries[0]));
+  }
+}
+
 EMSCRIPTEN_KEEPALIVE void webvulkan_reset_runtime_shader_registry(void) {
   for (uint32_t i = 0u; i < g_runtime_spirv_count; ++i) {
     if (g_runtime_spirv_entries[i].bytes) {
@@ -142,6 +178,44 @@ EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_dispatch_mode(uint32_t mode) {
 
 EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_get_runtime_dispatch_mode(void) {
   return g_runtime_dispatch_mode;
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_runtime_set_dispatch_mode_fast_wasm(int enabled) {
+  if (enabled) {
+    return webvulkan_set_runtime_dispatch_mode(WEBVULKAN_RUNTIME_DISPATCH_MODE_FAST_WASM);
+  }
+  return webvulkan_set_runtime_dispatch_mode(WEBVULKAN_RUNTIME_DISPATCH_MODE_RAW_LLVM_IR);
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_runtime_set_active_shader_bundle(uint32_t keyLo, uint32_t keyHi) {
+  return webvulkan_set_runtime_active_shader_key(keyLo, keyHi);
+}
+
+EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_runtime_get_registered_spirv_count(void) {
+  return g_runtime_spirv_count;
+}
+
+EMSCRIPTEN_KEEPALIVE uint32_t webvulkan_runtime_get_registered_wasm_count(void) {
+  return g_runtime_wasm_count;
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_runtime_unregister_shader_bundle(uint32_t keyLo, uint32_t keyHi) {
+  int removed = 0;
+  int spirvIndex = webvulkan_find_spirv_entry_index(keyLo, keyHi);
+  if (spirvIndex >= 0) {
+    webvulkan_remove_spirv_entry_at((uint32_t)spirvIndex);
+    removed = 1;
+  }
+  int wasmIndex = webvulkan_find_wasm_entry_index(keyLo, keyHi);
+  if (wasmIndex >= 0) {
+    webvulkan_remove_wasm_entry_at((uint32_t)wasmIndex);
+    removed = 1;
+  }
+  return removed ? 0 : -1;
+}
+
+EMSCRIPTEN_KEEPALIVE void webvulkan_runtime_clear_shader_bundles(void) {
+  webvulkan_reset_runtime_shader_registry();
 }
 
 EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_expected_dispatch_value(
@@ -261,6 +335,100 @@ EMSCRIPTEN_KEEPALIVE int webvulkan_register_runtime_wasm_module(
   return 0;
 }
 
+EMSCRIPTEN_KEEPALIVE int webvulkan_runtime_register_shader_bundle(const WebVulkanRuntimeShaderBundle* bundle) {
+  if (!bundle) {
+    return -10;
+  }
+  if (!bundle->spirvBytes || bundle->spirvByteCount == 0u) {
+    return -11;
+  }
+
+  int spirvRc = webvulkan_register_runtime_shader_spirv(
+    bundle->keyLo,
+    bundle->keyHi,
+    bundle->spirvBytes,
+    bundle->spirvByteCount,
+    bundle->spirvEntrypoint
+  );
+  if (spirvRc != 0) {
+    return spirvRc;
+  }
+
+  uint32_t expectedDispatchValue = bundle->keyLo;
+  if ((bundle->flags & WEBVULKAN_RUNTIME_SHADER_BUNDLE_HAS_EXPECTED_VALUE) != 0u) {
+    expectedDispatchValue = bundle->expectedDispatchValue;
+  }
+  (void)webvulkan_set_runtime_expected_dispatch_value(bundle->keyLo, bundle->keyHi, expectedDispatchValue);
+
+  int hasWasm = (bundle->flags & WEBVULKAN_RUNTIME_SHADER_BUNDLE_HAS_WASM) != 0u;
+  if (!hasWasm && bundle->wasmBytes && bundle->wasmByteCount > 0u) {
+    hasWasm = 1;
+  }
+  if (hasWasm) {
+    if (!bundle->wasmBytes || bundle->wasmByteCount == 0u) {
+      return -12;
+    }
+    int wasmRc = webvulkan_register_runtime_wasm_module(
+      bundle->keyLo,
+      bundle->keyHi,
+      bundle->wasmBytes,
+      bundle->wasmByteCount,
+      bundle->wasmEntrypoint,
+      bundle->wasmProvider
+    );
+    if (wasmRc != 0) {
+      return wasmRc;
+    }
+  }
+
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_runtime_register_shader_bundles(
+  const WebVulkanRuntimeShaderBundle* bundles,
+  uint32_t bundleCount
+) {
+  if (!bundles || bundleCount == 0u) {
+    return -10;
+  }
+  for (uint32_t i = 0u; i < bundleCount; ++i) {
+    int rc = webvulkan_runtime_register_shader_bundle(&bundles[i]);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int webvulkan_runtime_register_shader_bundle_params(
+  uint32_t keyLo,
+  uint32_t keyHi,
+  const uint8_t* spirvBytes,
+  uint32_t spirvByteCount,
+  const char* spirvEntrypoint,
+  const uint8_t* wasmBytes,
+  uint32_t wasmByteCount,
+  const char* wasmEntrypoint,
+  const char* wasmProvider,
+  uint32_t expectedDispatchValue,
+  uint32_t flags
+) {
+  WebVulkanRuntimeShaderBundle bundle;
+  memset(&bundle, 0, sizeof(bundle));
+  bundle.keyLo = keyLo;
+  bundle.keyHi = keyHi;
+  bundle.spirvBytes = spirvBytes;
+  bundle.spirvByteCount = spirvByteCount;
+  bundle.spirvEntrypoint = spirvEntrypoint;
+  bundle.wasmBytes = wasmBytes;
+  bundle.wasmByteCount = wasmByteCount;
+  bundle.wasmEntrypoint = wasmEntrypoint;
+  bundle.wasmProvider = wasmProvider;
+  bundle.expectedDispatchValue = expectedDispatchValue;
+  bundle.flags = flags;
+  return webvulkan_runtime_register_shader_bundle(&bundle);
+}
+
 EMSCRIPTEN_KEEPALIVE int webvulkan_register_runtime_shader_bundle(
   uint32_t keyLo,
   uint32_t keyHi,
@@ -272,30 +440,19 @@ EMSCRIPTEN_KEEPALIVE int webvulkan_register_runtime_shader_bundle(
   const char* wasmEntrypoint,
   const char* wasmProvider
 ) {
-  int spirvRc = webvulkan_register_runtime_shader_spirv(
+  return webvulkan_runtime_register_shader_bundle_params(
     keyLo,
     keyHi,
     spirvBytes,
     spirvByteCount,
-    spirvEntrypoint
-  );
-  if (spirvRc != 0) {
-    return spirvRc;
-  }
-
-  int wasmRc = webvulkan_register_runtime_wasm_module(
-    keyLo,
-    keyHi,
+    spirvEntrypoint,
     wasmBytes,
     wasmByteCount,
     wasmEntrypoint,
-    wasmProvider
+    wasmProvider,
+    keyLo,
+    WEBVULKAN_RUNTIME_SHADER_BUNDLE_HAS_WASM
   );
-  if (wasmRc != 0) {
-    return wasmRc;
-  }
-
-  return 0;
 }
 
 EMSCRIPTEN_KEEPALIVE int webvulkan_get_runtime_wasm_used(void) {
@@ -307,12 +464,18 @@ EMSCRIPTEN_KEEPALIVE const char* webvulkan_get_runtime_wasm_provider(void) {
 }
 
 EMSCRIPTEN_KEEPALIVE int webvulkan_set_runtime_shader_spirv(const uint8_t* bytes, uint32_t byteCount) {
-  return webvulkan_register_runtime_shader_spirv(
+  return webvulkan_runtime_register_shader_bundle_params(
     WEBVULKAN_RUNTIME_DEFAULT_SHADER_KEY_LO,
     WEBVULKAN_RUNTIME_DEFAULT_SHADER_KEY_HI,
     bytes,
     byteCount,
-    "write_const"
+    "write_const",
+    0,
+    0u,
+    0,
+    0,
+    WEBVULKAN_RUNTIME_DEFAULT_SHADER_KEY_LO,
+    WEBVULKAN_RUNTIME_SHADER_BUNDLE_HAS_EXPECTED_VALUE
   );
 }
 
